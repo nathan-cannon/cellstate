@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'bun:test';
-import { layout, wrapText, contentHeight } from '../layout.js';
-import { createNode, appendChild, type TNode } from '../nodes.js';
+import { layout, wrapText, contentHeight } from '../../../src/tui/layout.js';
+import { createNode, appendChild, type TNode } from '../../../src/tui/nodes.js';
 
 /** Helper: create a box node with props */
 function box(props: Record<string, any> = {}): TNode {

@@ -1,7 +1,7 @@
 import XtermHeadless from "@xterm/headless";
 const { Terminal } = XtermHeadless;
 import { readBufferIntoGrid } from "./buffer-reader.js";
-import type { CellGrid } from "./cell.js";
+import type { CellGrid } from "../src/cell.js";
 
 export function parseAnsi(
   ansi: string,

@@ -3,8 +3,8 @@ import React, { useState, useEffect } from "react";
 import { render, Text, Box } from "ink";
 import { Writable } from "node:stream";
 import { VirtualScreen } from "../virtual-screen.js";
-import { diff, fullRedraw } from "../diff.js";
-import { gridToDebugString, cellsEqual, type CellGrid } from "../cell.js";
+import { diff, fullRedraw } from "../../src/diff.js";
+import { gridToDebugString, cellsEqual, type CellGrid } from "../../src/cell.js";
 
 /**
  * Create a fake TTY writable stream that captures all output chunks.

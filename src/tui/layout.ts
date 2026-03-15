@@ -209,6 +209,125 @@ function shiftNodeX(node: TNode, dx: number): void {
   }
 }
 
+/** Recursively shift a node and all its descendants by dy on the y-axis. */
+function shiftNodeY(node: TNode, dy: number): void {
+  if (!node.layout) return;
+  node.layout.y += dy;
+  for (const child of node.children) {
+    shiftNodeY(child, dy);
+  }
+}
+
+/** Redistribute children along the main axis (column) when extra space exists. */
+function applyJustifyContent(
+  node: TNode,
+  startY: number,
+  contentHeight: number,
+  containerHeight: number,
+): void {
+  const justify = node.props.justifyContent as string | undefined;
+  if (!justify || justify === 'flex-start') return;
+
+  const children = node.children.filter(c => c.layout && c.props.display !== 'none');
+  if (children.length === 0) return;
+
+  const extraSpace = containerHeight - contentHeight;
+  if (extraSpace <= 0) return;
+
+  let offset = 0;
+  let gap = 0;
+
+  switch (justify) {
+    case 'flex-end':
+      offset = extraSpace;
+      break;
+    case 'center':
+      offset = Math.floor(extraSpace / 2);
+      break;
+    case 'space-between':
+      if (children.length > 1) {
+        gap = extraSpace / (children.length - 1);
+      }
+      break;
+    case 'space-around': {
+      const space = extraSpace / children.length;
+      offset = Math.floor(space / 2);
+      gap = space;
+      break;
+    }
+    case 'space-evenly': {
+      const space = extraSpace / (children.length + 1);
+      offset = Math.floor(space);
+      gap = space;
+      break;
+    }
+  }
+
+  let cumulativeGap = 0;
+  for (let i = 0; i < children.length; i++) {
+    const shift = Math.floor(offset + cumulativeGap);
+    if (shift !== 0) {
+      shiftNodeY(children[i]!, shift);
+    }
+    cumulativeGap += gap;
+  }
+}
+
+/** Redistribute children along the main axis (row) when extra space exists. */
+function applyJustifyContentRow(
+  node: TNode,
+  startX: number,
+  contentWidth: number,
+  containerWidth: number,
+): void {
+  const justify = node.props.justifyContent as string | undefined;
+  if (!justify || justify === 'flex-start') return;
+
+  const children = node.children.filter(c => c.layout && c.props.display !== 'none');
+  if (children.length === 0) return;
+
+  const extraSpace = containerWidth - contentWidth;
+  if (extraSpace <= 0) return;
+
+  let offset = 0;
+  let gap = 0;
+
+  switch (justify) {
+    case 'flex-end':
+      offset = extraSpace;
+      break;
+    case 'center':
+      offset = Math.floor(extraSpace / 2);
+      break;
+    case 'space-between':
+      if (children.length > 1) {
+        gap = extraSpace / (children.length - 1);
+      }
+      break;
+    case 'space-around': {
+      const space = extraSpace / children.length;
+      offset = Math.floor(space / 2);
+      gap = space;
+      break;
+    }
+    case 'space-evenly': {
+      const space = extraSpace / (children.length + 1);
+      offset = Math.floor(space);
+      gap = space;
+      break;
+    }
+  }
+
+  let cumulativeGap = 0;
+  for (let i = 0; i < children.length; i++) {
+    const shift = Math.floor(offset + cumulativeGap);
+    if (shift !== 0) {
+      shiftNodeX(children[i]!, shift);
+    }
+    cumulativeGap += gap;
+  }
+}
+
 /** Apply alignItems offset to a child after it has been laid out. */
 function applyAlignment(
   align: string | undefined,
@@ -319,6 +438,15 @@ function layoutChildrenList(
       y += gap;
     }
   }
+
+  if (parent.props.height != null) {
+    const border = parent.props.borderStyle ? 1 : 0;
+    const pad = parent.props.padding ?? 0;
+    const paddingTop = (parent.props.paddingTop ?? pad) + border;
+    const paddingBottom = (parent.props.paddingBottom ?? pad) + border;
+    const childrenHeight = computeChildrenHeightFromList(children, startY);
+    applyJustifyContent(parent, startY, childrenHeight, parent.props.height - paddingTop - paddingBottom);
+  }
 }
 
 /** Compute height from an arbitrary list of children (used for root's normal children). */
@@ -359,6 +487,15 @@ function layoutColumn(
     if (i < node.children.length - 1) {
       y += gap;
     }
+  }
+
+  if (node.props.height != null) {
+    const border = node.props.borderStyle ? 1 : 0;
+    const pad = node.props.padding ?? 0;
+    const paddingTop = (node.props.paddingTop ?? pad) + border;
+    const paddingBottom = (node.props.paddingBottom ?? pad) + border;
+    const childrenHeight = computeChildrenHeight(node, startY);
+    applyJustifyContent(node, startY, childrenHeight, node.props.height - paddingTop - paddingBottom);
   }
 }
 
@@ -424,6 +561,10 @@ function layoutRow(
 
   // Set row children heights are already set; update parent awareness of row height
   // The parent reads child.layout.height, which is set by layoutNode
+
+  // justifyContent along the x-axis for rows
+  const usedWidth = x - startX;
+  applyJustifyContentRow(node, startX, usedWidth, availableWidth);
 }
 
 function layoutNode(
@@ -465,6 +606,11 @@ function layoutNode(
 
   // Compute height from children
   node.layout.height = computeChildrenHeight(node, contentY) + paddingTop + paddingBottom;
+
+  // Fixed height overrides computed height
+  if (node.props.height != null) {
+    node.layout.height = Math.max(node.props.height, 0);
+  }
 }
 
 function layoutTextNode(

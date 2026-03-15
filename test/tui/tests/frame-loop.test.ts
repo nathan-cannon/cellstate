@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
 import { EventEmitter } from 'node:events';
 import React from 'react';
-import { createFrameLoop } from '../frame-loop.js';
-import { gridToDebugString } from '../../cell.js';
+import { createFrameLoop } from '../../../src/tui/frame-loop.js';
+import { gridToDebugString } from '../../../src/cell.js';
 
 // ---------------------------------------------------------------------------
 // Mock stdout

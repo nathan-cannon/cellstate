@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { highlightCode } from '../highlighter.js';
+import { highlightCode } from '../../../src/tui/highlighter.js';
 
 describe('highlightCode', () => {
   it('known language returns segments with fg colors', () => {

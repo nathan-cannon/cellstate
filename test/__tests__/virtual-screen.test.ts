@@ -1,7 +1,7 @@
 import { describe, test, expect, afterEach } from "bun:test";
 import chalk from "chalk";
 import { VirtualScreen } from "../virtual-screen.js";
-import { gridToDebugString, ColorMode } from "../cell.js";
+import { gridToDebugString, ColorMode } from "../../src/cell.js";
 import { renderMarkdown } from "./markdown-helper.js";
 
 // Force chalk to emit color even without a TTY

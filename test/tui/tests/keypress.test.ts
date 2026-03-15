@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { decodeKeypress } from '../keypress.js';
+import { decodeKeypress } from '../../../src/tui/keypress.js';
 
 describe('decodeKeypress', () => {
   it('decodes printable ASCII', () => {

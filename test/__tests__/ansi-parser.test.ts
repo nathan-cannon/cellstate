@@ -3,7 +3,7 @@ import fc from "fast-check";
 import XtermHeadless from "@xterm/headless";
 const { Terminal } = XtermHeadless;
 import { parseAnsi } from "../ansi-parser.js";
-import { ColorMode, Attr } from "../cell.js";
+import { ColorMode, Attr } from "../../src/cell.js";
 import { renderMarkdown } from "./markdown-helper.js";
 
 describe("parseAnsi", () => {

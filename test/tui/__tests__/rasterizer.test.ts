@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'bun:test';
-import { rasterize } from '../rasterizer.js';
-import { layout } from '../layout.js';
-import { createNode, appendChild, type TNode, type LayoutResult, type WrappedLine } from '../nodes.js';
-import { Attr, ColorMode, type CellGrid } from '../../cell.js';
+import { rasterize } from '../../../src/tui/rasterizer.js';
+import { layout } from '../../../src/tui/layout.js';
+import { createNode, appendChild, type TNode, type LayoutResult, type WrappedLine } from '../../../src/tui/nodes.js';
+import { Attr, ColorMode, type CellGrid } from '../../../src/cell.js';
 
 /** Convert plain strings to WrappedLine format */
 function wl(...lines: string[]): WrappedLine[] {

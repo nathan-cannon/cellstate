@@ -5,9 +5,9 @@
  * Run: bun src/renderer/tui/demo.ts
  * Debug: DEBUG=1 bun src/renderer/tui/demo.ts
  */
-import { createFrameLoop } from './frame-loop.js';
+import { createFrameLoop } from '../../src/tui/frame-loop.js';
 import React from 'react';
-import { markdownToElements } from './markdown.js';
+import { markdownToElements } from '../../src/tui/markdown.js';
 
 const demoMarkdown = `## Analysis
 

@@ -5,7 +5,7 @@ import {
   DEFAULT_COLOR,
   type CellGrid,
   type Color,
-} from "./cell.js";
+} from "../src/cell.js";
 
 /**
  * Map xterm's internal color mode constants to our ColorMode enum.

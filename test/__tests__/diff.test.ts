@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test";
 import fc from "fast-check";
 import React from "react";
 import { renderToString, Text, Box } from "ink";
-import { diff, fullRedraw } from "../diff.js";
+import { diff, fullRedraw } from "../../src/diff.js";
 import { parseAnsi } from "../ansi-parser.js";
 import { VirtualScreen } from "../virtual-screen.js";
 import {
@@ -12,7 +12,7 @@ import {
   type Cell,
   type CellGrid,
   type Color,
-} from "../cell.js";
+} from "../../src/cell.js";
 
 const e = React.createElement;
 
@@ -423,9 +423,9 @@ describe("diff with real Ink output", () => {
 // Stale pixel regression: spinner removal (content shrink) via diff
 // ---------------------------------------------------------------------------
 
-import { createNode, appendChild } from "../tui/nodes.js";
-import { layout, contentHeight } from "../tui/layout.js";
-import { rasterize } from "../tui/rasterizer.js";
+import { createNode, appendChild } from "../../src/tui/nodes.js";
+import { layout, contentHeight } from "../../src/tui/layout.js";
+import { rasterize } from "../../src/tui/rasterizer.js";
 
 describe("stale pixel regression: spinner shrink", () => {
   const COLS = 127;

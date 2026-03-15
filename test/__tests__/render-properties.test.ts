@@ -1,6 +1,6 @@
 import { describe, test } from "bun:test";
 import fc from "fast-check";
-import { diff, fullRedraw } from "../diff.js";
+import { diff, fullRedraw } from "../../src/diff.js";
 import {
   cellsEqual,
   createGrid,
@@ -9,11 +9,11 @@ import {
   type Cell,
   type CellGrid,
   type Color,
-} from "../cell.js";
+} from "../../src/cell.js";
 import { VirtualScreen } from "../virtual-screen.js";
-import { createNode, appendChild, type TNode, type Segment, type SegmentStyle } from "../tui/nodes.js";
-import { layout, contentHeight } from "../tui/layout.js";
-import { rasterize } from "../tui/rasterizer.js";
+import { createNode, appendChild, type TNode, type Segment, type SegmentStyle } from "../../src/tui/nodes.js";
+import { layout, contentHeight } from "../../src/tui/layout.js";
+import { rasterize } from "../../src/tui/rasterizer.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 

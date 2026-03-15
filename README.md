@@ -268,8 +268,10 @@ Container element for layout. Stack children vertically or horizontally.
 | `flexDirection`   | `'column' \| 'row'`                                   | Stack direction (default: `column`)                  |
 | `gap`             | `number`                                               | Space between children                               |
 | `width`           | `number`                                               | Fixed width in columns                               |
+| `height`          | `number`                                               | Fixed height in rows. Children are positioned from the top; the box height is fixed regardless of content size |
 | `flexGrow`        | `number`                                               | Fill remaining space in row layout                   |
 | `alignItems`      | `'stretch' \| 'flex-start' \| 'center' \| 'flex-end'` | Cross-axis alignment (default: `stretch`)            |
+| `justifyContent`  | `'flex-start' \| 'center' \| 'flex-end' \| 'space-between' \| 'space-around' \| 'space-evenly'` | Main-axis distribution of children (default: `flex-start`). Only effective when the container has extra space (e.g. fixed `height`) |
 | `padding`         | `number`                                               | Padding on all sides                                 |
 | `paddingLeft`     | `number`                                               | Left padding                                         |
 | `paddingRight`    | `number`                                               | Right padding                                        |

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'bun:test';
 import React from 'react';
-import { mountRoot } from '../reconciler.js';
-import type { TNode } from '../nodes.js';
+import { mountRoot } from '../../../src/tui/reconciler.js';
+import type { TNode } from '../../../src/tui/nodes.js';
 
 // Convenience host element "components" for createElement
 const Box = 'box' as any;

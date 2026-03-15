@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'bun:test';
 import React from 'react';
-import { mountRoot } from '../reconciler.js';
-import { flattenInline, markdownToElements } from '../markdown.js';
-import type { TNode, Segment } from '../nodes.js';
+import { mountRoot } from '../../../src/tui/reconciler.js';
+import { flattenInline, markdownToElements } from '../../../src/tui/markdown.js';
+import type { TNode, Segment } from '../../../src/tui/nodes.js';
 import type { PhrasingContent } from 'mdast';
 
 const Box = 'box' as any;

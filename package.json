@@ -18,6 +18,7 @@
   ],
   "scripts": {
     "build": "rm -rf dist && tsc",
+    "test": "bun test",
     "prepublishOnly": "bun run build"
   },
   "peerDependencies": {
@@ -35,6 +36,14 @@
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-reconciler": "^0.33.0",
+    "@xterm/headless": "^6.0.0",
+    "chalk": "^5.6.2",
+    "cli-highlight": "^2.1.11",
+    "fast-check": "^4.6.0",
+    "ink": "^6.8.0",
+    "marked": "^17.0.4",
+    "marked-terminal": "^7.3.0",
+    "strip-ansi": "^7.2.0",
     "typescript": "^5.8.0"
   },
   "license": "MIT",
@@ -52,5 +61,10 @@
     "console",
     "ansi",
     "cellstate"
-  ]
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "homepage": "https://github.com/nathan-cannon/cellstate",
+  "sideEffects": false
 }

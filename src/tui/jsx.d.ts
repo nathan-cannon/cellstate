@@ -36,6 +36,8 @@ export interface BoxProps extends StyleProps {
   gap?: number;
   /** Fixed width in columns. If omitted, fills available width. */
   width?: number;
+  /** Fixed height in rows. If omitted, shrinks to fit children. */
+  height?: number;
   /** Fill remaining space in a row layout. */
   flexGrow?: number | boolean;
   /** Margin on all four sides (shorthand). Individual sides override. */
@@ -64,6 +66,8 @@ export interface BoxProps extends StyleProps {
   borderColor?: string;
   /** Cross-axis alignment of children. Default: 'stretch'. */
   alignItems?: 'stretch' | 'center' | 'flex-start' | 'flex-end';
+  /** Main-axis distribution of children. Only effective when the container has extra space (e.g. fixed height). Default: 'flex-start'. */
+  justifyContent?: 'flex-start' | 'center' | 'flex-end' | 'space-between' | 'space-around' | 'space-evenly';
   /** Heading depth from markdown (passthrough, not consumed by layout/rasterizer). */
   depth?: number;
   /** Language hint from markdown code blocks (passthrough, not consumed by layout/rasterizer). */

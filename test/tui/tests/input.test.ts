@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'bun:test';
-import { createInputState, handleKey, type InputState } from '../input.js';
-import type { KeypressEvent } from '../keypress.js';
+import { createInputState, handleKey, type InputState } from '../../../src/tui/input.js';
+import type { KeypressEvent } from '../../../src/tui/keypress.js';
 
 function typeString(state: InputState, str: string): InputState {
   for (const ch of str) {
