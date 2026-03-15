@@ -1,0 +1,168 @@
+import React from 'react';
+import { createFrameLoop } from './frame-loop.js';
+import { AppCtx } from './app-context.js';
+import { FocusRegistry, FocusCtx } from './focus-context.js';
+import { onKeypress } from './keypress.js';
+import { patchConsole } from './patch-console.js';
+import { writeFileSync } from 'node:fs';
+import type tty from 'node:tty';
+
+export interface RenderOptions {
+  stdout?: tty.WriteStream;
+  stdin?: tty.ReadStream;
+  patchConsole?: boolean;
+}
+
+export interface RenderInstance {
+  unmount: () => void;
+  waitUntilExit: () => Promise<unknown>;
+  dumpFrameLog: (path: string) => void;
+}
+
+/**
+ * ErrorBoundary catches errors from the React component tree during
+ * reconciliation. Without this, async render errors would leave the
+ * terminal in raw mode with a hidden cursor.
+ */
+class ErrorBoundary extends React.Component<
+  { children?: React.ReactNode; onError: (error: Error) => void },
+  { hasError: boolean }
+> {
+  constructor(props: { children?: React.ReactNode; onError: (error: Error) => void }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(): { hasError: boolean } {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error): void {
+    this.props.onError(error);
+  }
+
+  render(): React.ReactNode {
+    if (this.state.hasError) return null;
+    return this.props.children;
+  }
+}
+
+/**
+ * Mount a React element into the terminal with the full rendering pipeline:
+ * frame loop, raw mode, cursor management, and cleanup.
+ *
+ * Does NOT handle Ctrl+C, SIGINT, or any app-level signal handling —
+ * the consumer is responsible for calling unmount() when appropriate.
+ */
+export function render(
+  element: React.ReactElement,
+  options?: RenderOptions,
+): RenderInstance {
+  const stdout = options?.stdout ?? process.stdout;
+  const stdin = options?.stdin ?? process.stdin;
+
+  let unmounted = false;
+  let exitResolve: ((value?: unknown) => void) | null = null;
+  let exitReject: ((error: Error) => void) | null = null;
+  const exitPromise = new Promise<unknown>((resolve, reject) => {
+    exitResolve = resolve;
+    exitReject = reject;
+  });
+
+  const loop = createFrameLoop(stdout);
+
+  function handleError(error: Error): void {
+    // Restore terminal state before printing
+    unmount();
+    process.stderr.write(error.stack ?? error.message);
+    process.stderr.write('\n');
+  }
+
+  function exit(errorOrResult?: unknown): void {
+    unmount();
+    if (errorOrResult instanceof Error) {
+      if (exitReject) {
+        exitReject(errorOrResult);
+        exitReject = null;
+        exitResolve = null;
+      }
+    } else {
+      if (exitResolve) {
+        exitResolve(errorOrResult);
+        exitResolve = null;
+        exitReject = null;
+      }
+    }
+  }
+
+  const focusRegistry = new FocusRegistry();
+
+  const wrapped = React.createElement(
+    ErrorBoundary,
+    { onError: handleError },
+    React.createElement(
+      AppCtx.Provider,
+      { value: { exit } },
+      React.createElement(
+        FocusCtx.Provider,
+        { value: focusRegistry },
+        element,
+      ),
+    ),
+  );
+
+  // Start frame loop (cursor hide, reconciler mount, drain/resize listeners)
+  loop.start(wrapped);
+
+  // Raw mode — process keypresses as raw bytes
+  stdin.setRawMode(true);
+  stdin.resume();
+  stdout.write('\x1b[?2004h'); // enable bracketed paste mode
+
+  const unpatchConsole = (options?.patchConsole !== false)
+    ? patchConsole(stdout)
+    : null;
+
+  const focusCleanup = onKeypress((key) => {
+    if (key.type === 'tab') {
+      focusRegistry.focusNext();
+    } else if (key.type === 'shift-tab') {
+      focusRegistry.focusPrevious();
+    }
+  }, stdin);
+
+  const keepAlive = setInterval(() => {}, 60_000);
+
+  // Restore cursor on any exit path (including process.exit from consumer)
+  const exitHandler = () => {
+    writeFileSync(1, '\x1b[?25h');
+  };
+  process.on('exit', exitHandler);
+
+  function unmount(): void {
+    if (unmounted) return;
+    unmounted = true;
+
+    clearInterval(keepAlive);
+    unpatchConsole?.();
+    focusCleanup();
+    stdin.setRawMode(false);
+    stdin.pause();
+    stdout.write('\x1b[?2004l'); // disable bracketed paste mode
+    loop.stop();
+    process.off('exit', exitHandler);
+
+    // If exit() wasn't called, resolve with undefined
+    if (exitResolve) {
+      exitResolve(undefined);
+      exitResolve = null;
+      exitReject = null;
+    }
+  }
+
+  return {
+    unmount,
+    waitUntilExit: () => exitPromise,
+    dumpFrameLog: (path: string) => loop.dumpFrameLog(path),
+  };
+}

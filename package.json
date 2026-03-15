@@ -1,0 +1,56 @@
+{
+  "name": "cellstate",
+  "version": "0.1.0",
+  "description": "React terminal renderer with cell-level diffing, double-buffered rendering, and native scrollback. No alternate screen.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc",
+    "prepublishOnly": "bun run build"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  },
+  "dependencies": {
+    "react-reconciler": "^0.33.0",
+    "unified": "^11.0.5",
+    "remark-parse": "^11.0.0",
+    "remark-gfm": "^4.0.1",
+    "shiki": "^4.0.2"
+  },
+  "devDependencies": {
+    "@types/mdast": "^4.0.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-reconciler": "^0.33.0",
+    "typescript": "^5.8.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nathan-cannon/cellstate"
+  },
+  "keywords": [
+    "react",
+    "terminal",
+    "tui",
+    "cli",
+    "renderer",
+    "ink",
+    "console",
+    "ansi",
+    "cellstate"
+  ]
+}
