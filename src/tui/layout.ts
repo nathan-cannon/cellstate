@@ -362,11 +362,13 @@ function clearLayout(node: TNode): void {
 /** Get the text content from a text node (may be on the node or a text-instance child). */
 function getTextContent(node: TNode): string {
   if (node.text !== null) return node.text;
-  // Text element's string content lives in a text-instance child
+  // Text element's string content lives in text-instance children.
+  // Multiple children arise from mixed content like `<Text>Count: {n}</Text>`.
+  let result = '';
   for (const child of node.children) {
-    if (child.text !== null) return child.text;
+    if (child.text !== null) result += child.text;
   }
-  return '';
+  return result;
 }
 
 /**
