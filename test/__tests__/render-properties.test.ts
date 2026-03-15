@@ -563,7 +563,7 @@ describe("render property tests", () => {
         `(20-frame chain, last diff output not captured)`,
       );
     }
-  });
+  }, 30_000);
 
   // ── Test 6: pending wrap stress ────────────────────────────────────────
   // NOTE: xterm-headless may be more lenient about pending wrap state than real

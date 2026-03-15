@@ -1,4 +1,4 @@
-## CellState
+# CellState
 A React terminal renderer for building modern interactive UIs.
 
 CSS-style layout, component-based UI, and native terminal behavior. Scrolling, text selection, Cmd+F, and copy/paste all work exactly like the rest of your terminal. No alternate screen.
@@ -70,7 +70,7 @@ await app.waitUntilExit();
     - [decodeKeypress](#decodekeypress)
 
 
-## Getting started
+## Getting Started
 CellState uses its own Flexbox layout engine for the terminal, allowing you to build user interfaces for your CLIs using familiar CSS-like properties. `<Box>` is your layout container (like `<div>` with `display: flex`), `<Text>` renders styled text. State changes via hooks trigger re-renders automatically.
 
 All visible text must be inside a `<Text>` component. You can use plain string children or structured segments for mixed styles. The built-in markdown renderer (powered by remark with syntax-highlighted code blocks via Shiki) produces `<Box>` and `<Text>` trees for you.
@@ -189,7 +189,7 @@ test('renders greeting', async () => {
 ### `<Text>`
 Renders styled text with automatic line wrapping.
 
-```
+```tsx
 <Text>Plain text</Text>
 <Text bold>Bold text</Text>
 <Text color="#00ff00">Green text</Text>
@@ -207,8 +207,8 @@ Renders styled text with automatic line wrapping.
 | `strikethrough`   | `boolean`   | Strikethrough text                                        |
 | `dim`             | `boolean`   | Dimmed/faint text                                         |
 | `inverse`         | `boolean`   | Swap foreground and background colors                     |
-| `color`           | `string`    | Text color as hex (`#RRGGBB` or `#RRGGBBAA`)              |
-| `backgroundColor` | `string`    | Background color                                          |
+| `color`           | `string`    | Text color (hex like `#ff0000` or named: `red`, `green`, `blue`, `yellow`, `cyan`, `magenta`, `white`, `gray`) |
+| `backgroundColor` | `string`    | Background color (hex or named color)                     |
 | `hangingIndent`   | `number`    | Indent for wrapped continuation lines                     |
 | `wrap`            | `string`    | Text overflow: `'wrap'` (default), `'truncate'`, `'truncate-start'`, `'truncate-middle'` |
 | `segments`        | `Segment[]` | Multiple styled sections in one text element              |
@@ -232,7 +232,7 @@ When text exceeds the available width, `wrap` controls how it's handled:
 
 For mixed styles in a single element, use segments:
 
-```
+```tsx
 <Text segments={[
   { text: 'Error: ', style: { bold: true, color: '#ff0000' } },
   { text: 'file not found' },
@@ -245,7 +245,7 @@ Segment styles support: `bold`, `italic`, `underline`, `strikethrough`, `dim`, `
 ### `<Box>`
 Container element for layout. Stack children vertically or horizontally.
 
-```
+```tsx
 <Box flexDirection="column" gap={1}>
   <Text>First</Text>
   <Text>Second</Text>
@@ -283,8 +283,8 @@ Container element for layout. Stack children vertically or horizontally.
 | `marginTop`       | `number`                                               | Top margin                                           |
 | `marginBottom`    | `number`                                               | Bottom margin                                        |
 | `borderStyle`     | `'single' \| 'double' \| 'round' \| 'bold'`           | Box border style                                     |
-| `borderColor`     | `string`                                               | Border color                                         |
-| `backgroundColor` | `string`                                               | Background fill color                                |
+| `borderColor`     | `string`                                               | Border color (hex or named color)                    |
+| `backgroundColor` | `string`                                               | Background fill color (hex or named color)           |
 
 Use `display="none"` to hide a component without unmounting it. The component stays in the React tree (state is preserved) but produces no visual output and takes no space in the layout. This is different from `{condition && <Component />}`, which unmounts the component and destroys its state.
 
@@ -329,7 +329,7 @@ Custom character and color:
 
 Subscribe to keyboard events inside components. The callback fires for every keypress while `active` is true (default).
 
-```
+```tsx
 import { useInput } from 'cellstate';
 
 function MyComponent() {
