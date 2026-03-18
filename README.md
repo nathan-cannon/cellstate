@@ -6,6 +6,20 @@ CSS-style layout, component-based UI, and native terminal behavior. Scrolling, t
 CellState uses double-buffered rendering with cell-level diffing, SGR state tracking, row-level damage detection, wide character support, and synchronized output. Tested with 3,600+ property-based test iterations against xterm.js.
 
 
+https://github.com/user-attachments/assets/c6fa0a1c-b50a-43cf-b801-d134f0538f25
+
+
+## Performance
+
+Benchmarked against Ink and raw escape codes. Full methodology and code: [tui-benchmarks](https://github.com/nathan-cannon/tui-benchmarks)
+
+| Messages | Content | CellState Pipeline | Raw    | Ink     |
+|----------|---------|--------------------|--------|---------|
+| 100      | 13.3 KB | 1.10ms             | 1.10ms | 26.53ms |
+| 250      | 33.1 KB | 2.54ms.            | 2.44ms | 36.93ms |
+| 500      | 66.0 KB | 5.10ms             | 4.81ms | 63.05ms |
+
+
 ## Architecture
 CellState uses a custom React reconciler that renders directly to a cell grid with no intermediate ANSI string building. It runs in inline mode rather than alternate screen, so native terminal features like scrolling, text selection, Cmd+F, and copy/paste work exactly as expected.
 
