@@ -264,14 +264,8 @@ describe("Ink output capture", () => {
     expect(lines[2]).toBe("line 3");
   });
 
-  test("two-frame diff pipeline: capture frames, diff grids, apply to fresh screen", async () => {
-    const origIsTTY = process.stdout.isTTY;
-    const origColumns = process.stdout.columns;
-    const origRows = process.stdout.rows;
-    process.stdout.isTTY = true;
-    process.stdout.columns = 120;
-    process.stdout.rows = 40;
-
+  // Ink requires a real TTY to produce output
+  test.skipIf(!!process.env.CI)("two-frame diff pipeline: capture frames, diff grids, apply to fresh screen", async () => {
     const { stream, chunks } = createCaptureStream(80, 24);
 
     let updateFn: ((s: string) => void) | null = null;
@@ -347,10 +341,6 @@ describe("Ink output capture", () => {
     expect(resultLines[0]).toContain("Header: stable");
     expect(resultLines[1]).toContain("Content: updated");
     expect(resultLines[2]).toContain("Footer: stable");
-
-    process.stdout.isTTY = origIsTTY;
-    process.stdout.columns = origColumns;
-    process.stdout.rows = origRows;
   });
 
   test("full pipeline: capture → VirtualScreen → diff → apply", async () => {
@@ -418,14 +408,8 @@ describe("Ink output capture", () => {
     expect(lines[2]).toContain("thinking...");
   });
 
-  test("write-count diagnostic: how many write() calls per Ink frame", async () => {
-    const origIsTTY = process.stdout.isTTY;
-    const origColumns = process.stdout.columns;
-    const origRows = process.stdout.rows;
-    process.stdout.isTTY = true;
-    process.stdout.columns = 120;
-    process.stdout.rows = 40;
-
+  // Ink requires a real TTY to produce output
+  test.skipIf(!!process.env.CI)("write-count diagnostic: how many write() calls per Ink frame", async () => {
     const writes: string[] = [];
     const stream = new Writable({
       write(chunk, _enc, cb) {
@@ -479,9 +463,5 @@ describe("Ink output capture", () => {
     // Just verify the test ran — the diagnostic output is what matters
     expect(frame1Writes).toBeGreaterThan(0);
     expect(frame2Writes).toBeGreaterThan(0);
-
-    process.stdout.isTTY = origIsTTY;
-    process.stdout.columns = origColumns;
-    process.stdout.rows = origRows;
   });
 });
