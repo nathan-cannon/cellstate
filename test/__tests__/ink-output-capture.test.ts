@@ -31,6 +31,31 @@ function waitFrame(ms = 150): Promise<void> {
 }
 
 /**
+ * Wait until new chunks appear in the capture array, with a timeout.
+ * Returns once at least one new chunk has appeared and no more arrive
+ * within a short settle window.
+ */
+async function waitForOutput(
+  chunks: string[],
+  fromIndex = 0,
+  timeoutMs = 2000,
+  settleMs = 100
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  // Wait for at least one new chunk
+  while (chunks.length <= fromIndex && Date.now() < deadline) {
+    await waitFrame(20);
+  }
+  // Let output settle — wait until no new chunks arrive
+  let prev = chunks.length;
+  while (Date.now() < deadline) {
+    await waitFrame(settleMs);
+    if (chunks.length === prev) break;
+    prev = chunks.length;
+  }
+}
+
+/**
  * Concatenate all captured chunks into a single string.
  */
 function joinChunks(chunks: string[], from = 0): string {
@@ -260,7 +285,7 @@ describe("Ink output capture", () => {
     });
 
     // Frame 1
-    await waitFrame();
+    await waitForOutput(chunks);
     const frame1End = chunks.length;
     const frame1Raw = joinChunks(chunks);
 
@@ -271,7 +296,7 @@ describe("Ink output capture", () => {
 
     // Frame 2 — update content
     updateFn!("updated");
-    await waitFrame();
+    await waitForOutput(chunks, frame1End);
     unmount();
     await waitFrame(50);
 
@@ -412,7 +437,7 @@ describe("Ink output capture", () => {
     });
 
     // Frame 1 — initial render
-    await waitFrame();
+    await waitForOutput(writes);
     const frame1Writes = writes.length;
     console.log(`\nInitial render: ${frame1Writes} write() calls`);
     for (let i = 0; i < writes.length; i++) {
@@ -422,7 +447,7 @@ describe("Ink output capture", () => {
     // Frame 2 — state update
     const frame2Start = writes.length;
     updateFn!("updated");
-    await waitFrame();
+    await waitForOutput(writes, frame2Start);
 
     const frame2Writes = writes.length - frame2Start;
     console.log(`Update render: ${frame2Writes} write() calls`);
