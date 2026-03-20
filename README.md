@@ -12,7 +12,7 @@
 
 ---
 
-<p align="center"><img src="demo.gif" alt="CellState demo" width="640"></p>
+<p align="center"><img src="demo.gif" alt="CellState demo"></p>
 
 <p align="center"><em>CellState rendering a coding agent UI via OpenCode's serve API</em></p>
 
