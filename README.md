@@ -1,12 +1,32 @@
-# CellState
-A React terminal renderer for building modern interactive UIs.
+<h1 align="center">CellState</h1>
+<p align="center"><strong>React terminal renderer with cell-level diffing. No alternate screen.</strong></p>
+<p align="center">
+  <a href="https://www.npmjs.com/package/cellstate"><img src="https://img.shields.io/npm/v/cellstate?color=crimson&logo=npm" alt="npm version"></a>
+  <a href="https://github.com/nathan-cannon/cellstate/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/nathan-cannon/cellstate/test.yml?label=tests&logo=github" alt="Tests"></a>
+  <a href="https://reactjs.org"><img src="https://img.shields.io/badge/React-19%2B-61dafb?logo=react&logoColor=white" alt="React 19+"></a>
+  <a href="https://www.typescriptlang.org"><img src="https://img.shields.io/badge/TypeScript-First-3178c6?logo=typescript&logoColor=white" alt="TypeScript"></a>
+  <a href="https://github.com/nathan-cannon/cellstate/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue" alt="License: MIT"></a>
+</p>
 
-CSS-style layout, component-based UI, and native terminal behavior. Scrolling, text selection, Cmd+F, and copy/paste all work exactly like the rest of your terminal. No alternate screen.
+<p align="center">Built on the architecture behind Claude Code's rendering rewrite.</p>
 
-CellState uses double-buffered rendering with cell-level diffing, SGR state tracking, row-level damage detection, wide character support, and synchronized output. Tested with 3,600+ property-based test iterations against xterm.js.
-
+---
 
 https://github.com/user-attachments/assets/c6fa0a1c-b50a-43cf-b801-d134f0538f25
+
+<p align="center"><em>CellState rendering a coding agent UI via OpenCode's serve API</em></p>
+
+---
+
+## How it works
+
+React reconciler → layout → rasterize to cell grid → extract viewport → cell-level diff → minimal ANSI escape sequences.
+
+Every frame renders the full content tree into an offscreen buffer. The viewport is extracted based on scroll position, then compared cell by cell against the previous frame. Only differences are written. Unchanged rows are skipped entirely. Within changed rows, SGR state tracking minimizes style changes: switching from bold red to bold blue emits one color change, not a full reset.
+
+Every frame is wrapped in DEC 2026 synchronized output sequences so terminals that support it paint atomically with zero tearing. Terminals without support silently ignore the sequences. Supported terminals: https://github.com/contour-terminal/vt-extensions/blob/master/synchronized-output.md
+
+Tested with 3,600+ property-based test iterations against xterm.js.
 
 
 ## Performance
@@ -16,18 +36,8 @@ Benchmarked against Ink and raw escape codes. Full methodology and code: [tui-be
 | Messages | Content | CellState Pipeline | Raw    | Ink     |
 |----------|---------|--------------------|--------|---------|
 | 100      | 13.3 KB | 1.10ms             | 1.10ms | 26.53ms |
-| 250      | 33.1 KB | 2.54ms.            | 2.44ms | 36.93ms |
+| 250      | 33.1 KB | 2.54ms             | 2.44ms | 36.93ms |
 | 500      | 66.0 KB | 5.10ms             | 4.81ms | 63.05ms |
-
-
-## Architecture
-CellState uses a custom React reconciler that renders directly to a cell grid with no intermediate ANSI string building. It runs in inline mode rather than alternate screen, so native terminal features like scrolling, text selection, Cmd+F, and copy/paste work exactly as expected.
-
-Every frame renders the full content tree into an offscreen buffer. The viewport is extracted from that buffer based on how far the content has scrolled, compared cell by cell against the previous frame. Only the differences are written to the terminal.
-
-We use damage tracking to skip unchanged rows entirely and erase blank rows with a single command instead of overwriting every column. Within changed rows, individual cells are compared and only the differences are written. SGR state tracking is used to keep style changes minimal: switching from bold red to bold blue emits one color change, not a full reset.
-
->Every frame is wrapped in DEC 2026 synchronized output sequences so terminals that support it paint atomically with zero tearing. Terminals without support silently ignore the sequences. Supported terminals: https://github.com/contour-terminal/vt-extensions/blob/master/synchronized-output.md
 
 
 ## Install
@@ -648,7 +658,3 @@ process.stdin.on('data', (data: Buffer) => {
 ```
 
 Handles UTF-8 (multi-byte characters, emoji, CJK), CSI escape sequences (arrows, Home, End, Delete), control bytes (Ctrl+letter), and bracketed paste sequences. SGR mouse sequences are consumed silently.
-
-<br>
-
-*Inspired by the Claude Code renderer*
