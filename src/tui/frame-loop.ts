@@ -13,46 +13,8 @@ export interface FrameLoop {
   getGrid: () => CellGrid | null;
   /** Exposed for testing — how many rows have been pushed into terminal scrollback. */
   getScrollbackLines: () => number;
-  /** Dump the last ~20 frame states to a file for debugging. */
+  /** Write a snapshot of current frame loop state to a file for debugging. */
   dumpFrameLog: (path: string) => void;
-}
-
-interface FrameLogEntry {
-  ts: number;
-  type: 'full' | 'growth' | 'update';
-  contentHeight: number;
-  previousContentHeight: number;
-  scrollbackRows: number;
-  effectiveViewport: number;
-  cols: number;
-  rows: number;
-  /** Layout y of the last text node containing ❯ (the input prompt). -1 if not found. */
-  inputNodeY: number;
-  /** Height of the main content box (first non-fixed child of root). */
-  mainBoxHeight: number;
-  /** Number of children in the main content box. */
-  mainBoxChildren: number;
-  /** Trigger reason for full redraw. */
-  fullRedrawReason?: string;
-  /** Per-child details of the main content box. */
-  mainBoxChildDetails?: {
-    type: string;
-    y: number;
-    height: number;
-    children: number;
-    /** First text content or key prop for identification. */
-    hint: string;
-  }[];
-  /** State of prevGrid at the START of this frame (before rasterize). */
-  prevGridInfo?: {
-    width: number;
-    height: number;
-    lastContentRow: number;
-  } | null;
-  /** Milliseconds since the previous frame. */
-  msSincePrevFrame?: number;
-  /** Type of the immediately preceding frame. */
-  prevFrameType?: 'full' | 'growth' | 'update';
 }
 
 const DEC_2026_ON = '\x1b[?2026h';
@@ -74,120 +36,6 @@ export function createFrameLoop(stdout: NodeJS.WriteStream): FrameLoop {
   let isFirstFrame = true;
   let scrollbackRows = 0;
 
-  // ── Frame diagnostic ring buffer ──
-  const FRAME_LOG_SIZE = 20;
-  const frameLog: FrameLogEntry[] = [];
-  let lastFrameTs = 0;
-  let lastFrameType: 'full' | 'growth' | 'update' | null = null;
-
-  function findInputNodeY(root: TNode): number {
-    // Walk tree depth-first looking for a text node whose segments start with ❯
-    function walk(node: TNode): number {
-      if (node.type === 'text' && node.props.segments) {
-        const segs = node.props.segments as { text: string }[];
-        if (segs.length > 0 && segs[0].text.startsWith('❯')) {
-          return node.layout?.y ?? -1;
-        }
-      }
-      for (const child of node.children) {
-        const y = walk(child);
-        if (y !== -1) return y;
-      }
-      return -1;
-    }
-    return walk(root);
-  }
-
-  function getMainBox(root: TNode): TNode | null {
-    return root.children[0] ?? null;
-  }
-
-  function getChildHint(node: TNode): string {
-    // For text nodes, return first ~40 chars of content
-    if (node.type === 'text') {
-      if (node.props.segments) {
-        const segs = node.props.segments as { text: string }[];
-        const txt = segs.map((s) => s.text).join('').slice(0, 40);
-        return `text:${JSON.stringify(txt)}`;
-      }
-      return node.text ? `text:${JSON.stringify(node.text.slice(0, 40))}` : 'text:(empty)';
-    }
-    // For box nodes, peek at first text child or use props
-    if (node.props.backgroundColor) return `box[bg=${node.props.backgroundColor}]`;
-    // Peek at first descendant text for identification
-    function firstText(n: TNode): string | null {
-      if (n.type === 'text') {
-        if (n.props.segments) {
-          const segs = n.props.segments as { text: string }[];
-          return segs.map((s) => s.text).join('').slice(0, 30);
-        }
-        return n.text?.slice(0, 30) ?? null;
-      }
-      for (const c of n.children) {
-        const t = firstText(c);
-        if (t) return t;
-      }
-      return null;
-    }
-    const ft = firstText(node);
-    return ft ? `box>${JSON.stringify(ft)}` : `box(${node.children.length}ch)`;
-  }
-
-  function getMainBoxChildDetails(mainBox: TNode | null) {
-    if (!mainBox) return undefined;
-    return mainBox.children.map((child) => {
-      const hint = getChildHint(child);
-      return {
-        type: child.type,
-        y: child.layout?.y ?? -1,
-        height: child.layout?.height ?? -1,
-        children: child.children.length,
-        hint,
-        isSpinner: hint.includes('Thinking'),
-      };
-    });
-  }
-
-  function logFrame(
-    type: 'full' | 'growth' | 'update',
-    root: TNode,
-    ch: number,
-    prevCH: number,
-    ev: number,
-    cols: number,
-    rows: number,
-    extra?: Partial<FrameLogEntry>,
-  ): void {
-    const now = Date.now();
-    const mainBox = getMainBox(root);
-    const entry: FrameLogEntry = {
-      ts: now,
-      type,
-      contentHeight: ch,
-      previousContentHeight: prevCH,
-      scrollbackRows,
-      effectiveViewport: ev,
-      cols,
-      rows,
-      inputNodeY: findInputNodeY(root),
-      mainBoxHeight: mainBox?.layout?.height ?? -1,
-      mainBoxChildren: mainBox?.children.length ?? 0,
-      mainBoxChildDetails: getMainBoxChildDetails(mainBox),
-      prevGridInfo: prevGrid ? {
-        width: prevGrid.width,
-        height: prevGrid.height,
-        lastContentRow: lastContentRow(prevGrid),
-      } : null,
-      msSincePrevFrame: lastFrameTs > 0 ? now - lastFrameTs : undefined,
-      prevFrameType: lastFrameType ?? undefined,
-      ...extra,
-    };
-    lastFrameTs = now;
-    lastFrameType = type;
-    if (frameLog.length >= FRAME_LOG_SIZE) frameLog.shift();
-    frameLog.push(entry);
-  }
-
   function processFrame(root: TNode): void {
     const cols = stdout.columns ?? 80;
     const rows = stdout.rows ?? 24;
@@ -196,7 +44,7 @@ export function createFrameLoop(stdout: NodeJS.WriteStream): FrameLoop {
 
     if (isFirstFrame) {
       isFirstFrame = false;
-      doFullRedraw(root, cols, rows, 'first-frame');
+      doFullRedraw(root, cols, rows);
       return;
     }
 
@@ -209,34 +57,30 @@ export function createFrameLoop(stdout: NodeJS.WriteStream): FrameLoop {
 
     if (desiredScrollback < scrollbackRows) {
       // Scrollback contains rows that no longer exist — must clear and rebuild
-      doFullRedraw(root, cols, rows, 'content-shrink');
+      doFullRedraw(root, cols, rows);
       return;
     }
 
     if (desiredScrollback > scrollbackRows) {
       // Content grew past viewport — growth frame
-      doGrowthFrame(root, cols, rows, fullGrid, actualHeight, desiredScrollback);
+      doGrowthFrame(cols, rows, fullGrid, actualHeight, desiredScrollback);
       return;
     }
 
     // No scrollback change — update frame
-    doUpdateFrame(root, cols, rows, fullGrid, actualHeight, desiredScrollback);
+    doUpdateFrame(cols, rows, fullGrid, actualHeight, desiredScrollback);
   }
 
   function doFullRedraw(
     root: TNode,
     cols: number,
     rows: number,
-    reason: string = 'unknown',
   ): void {
     // Reset stale state — growthInner sets the real scrollbackRows value below
     scrollbackRows = 0;
     prevGrid = null;
 
     const ch = contentHeight(root);
-    logFrame('full', root, ch, 0, rows, cols, rows, {
-      fullRedrawReason: reason,
-    });
 
     if (ch <= 0) {
       // Nothing to draw — just clear
@@ -257,27 +101,24 @@ export function createFrameLoop(stdout: NodeJS.WriteStream): FrameLoop {
       process.stderr.write(`[FULL] scroll=${scrollSeq.length} redraw=${redrawSeq.length} bytes (scrollback=${scrollbackRows}, contentHeight=${actualHeight}, viewport=${rows})\n`);
     }
 
-    // Write 1: clear screen + scrollback + sequential content write.
-    const clearAndScroll = DEC_2026_ON + CLEAR_SCREEN_SCROLLBACK_HOME + CURSOR_HIDE + scrollSeq + DEC_2026_OFF;
-    let ok = stdout.write(clearAndScroll);
-    if (!ok) isFlushing = true;
-
-    // Write 2: viewport fullRedraw in its own DEC 2026 block.
-    const redrawOutput = DEC_2026_ON + redrawSeq + DEC_2026_OFF;
-    ok = stdout.write(redrawOutput);
-    if (!ok) isFlushing = true;
+    // Two separate DEC 2026 blocks: the terminal needs to finish processing
+    // scroll state changes (clear, pre-paint, push rows into scrollback) before
+    // the viewport redraw begins. Batching them risks the viewport redraw
+    // landing at the wrong scroll offset on terminals that flush scroll state
+    // lazily within a synchronized block.
+    const ok1 = stdout.write(DEC_2026_ON + CLEAR_SCREEN_SCROLLBACK_HOME + CURSOR_HIDE + scrollSeq + DEC_2026_OFF);
+    if (!ok1) isFlushing = true;
+    const ok2 = stdout.write(DEC_2026_ON + redrawSeq + DEC_2026_OFF);
+    if (!ok2) isFlushing = true;
   }
 
   function doGrowthFrame(
-    root: TNode,
     cols: number,
     rows: number,
     fullGrid: CellGrid,
     actualHeight: number,
     desiredScrollback: number,
   ): void {
-    logFrame('growth', root, actualHeight, 0, rows, cols, rows);
-
     const { scrollSeq, redrawSeq } = growthInner(fullGrid, actualHeight, desiredScrollback, cols, rows);
 
     if (process.env.DEBUG) {
@@ -350,17 +191,13 @@ export function createFrameLoop(stdout: NodeJS.WriteStream): FrameLoop {
   }
 
   function doUpdateFrame(
-    root: TNode,
-    cols: number,
+    _cols: number,
     rows: number,
     fullGrid: CellGrid,
     actualHeight: number,
     desiredScrollback: number,
   ): void {
     scrollbackRows = desiredScrollback;
-
-    // Log BEFORE diff so prevGridInfo captures the grid from the previous frame
-    logFrame('update', root, actualHeight, 0, rows, cols, rows);
 
     const viewportGrid = extractViewport(fullGrid, scrollbackRows, rows);
 
@@ -463,7 +300,7 @@ export function createFrameLoop(stdout: NodeJS.WriteStream): FrameLoop {
         );
       }
 
-      doFullRedraw(lastRoot, cols, rows, 'resize');
+      doFullRedraw(lastRoot, cols, rows);
     }
   }
 
@@ -518,8 +355,19 @@ export function createFrameLoop(stdout: NodeJS.WriteStream): FrameLoop {
     },
 
     dumpFrameLog(path: string): void {
-      const data = JSON.stringify(frameLog, null, 2);
-      writeFileSync(path, data);
+      const snapshot = {
+        ts: Date.now(),
+        cols: stdout.columns ?? 80,
+        rows: stdout.rows ?? 24,
+        scrollbackRows,
+        isFlushing,
+        hasPendingRoot: pendingRoot !== null,
+        hasLastRoot: lastRoot !== null,
+        isFirstFrame,
+        prevGridSize: prevGrid ? { width: prevGrid.width, height: prevGrid.height } : null,
+        lastGridSize: lastGrid ? { width: lastGrid.width, height: lastGrid.height } : null,
+      };
+      writeFileSync(path, JSON.stringify(snapshot, null, 2));
     },
   };
 }

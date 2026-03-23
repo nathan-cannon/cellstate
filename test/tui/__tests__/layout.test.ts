@@ -1151,3 +1151,74 @@ describe('alignItems', () => {
     expect(t.layout!.textAlign).toBe('center');
   });
 });
+
+describe('wide character wrapping', () => {
+  it('CJK characters count as 2 columns', () => {
+    // '你好' = 4 columns, fits in width 4
+    expect(wrapText('你好', 4)).toEqual(['你好']);
+    // '你好' = 4 columns, does NOT fit in width 3
+    expect(wrapText('你好', 3)).toEqual(['你', '好']);
+  });
+
+  it('mixed ASCII and CJK wrapping', () => {
+    // 'hi你好' = 2+4 = 6 columns
+    expect(wrapText('hi你好', 6)).toEqual(['hi你好']);
+    expect(wrapText('hi你好', 5)).toEqual(['hi你', '好']);
+    expect(wrapText('hi你好', 4)).toEqual(['hi你', '好']);
+  });
+
+  it('CJK wraps on space boundaries', () => {
+    // 'ab 你好' = 3+4 = 7 columns (including space)
+    expect(wrapText('ab 你好', 5)).toEqual(['ab', '你好']);
+  });
+
+  it('hard break between CJK characters', () => {
+    // '你好世界' = 8 columns
+    expect(wrapText('你好世界', 4)).toEqual(['你好', '世界']);
+    expect(wrapText('你好世界', 5)).toEqual(['你好', '世界']);
+  });
+
+  it('emoji (surrogate pairs) wrapping', () => {
+    // Each emoji is 2 columns
+    expect(wrapText('😀😀', 4)).toEqual(['😀😀']);
+    expect(wrapText('😀😀', 3)).toEqual(['😀', '😀']);
+    expect(wrapText('😀😀', 2)).toEqual(['😀', '😀']);
+  });
+
+  it('CJK with hanging indent', () => {
+    // Width 6, hangingIndent 2 → continuation width 4
+    const lines = wrapText('你好 世界abc', 6, 2);
+    // '你好' = 4 cols, fits in 6
+    // ' 世界abc' → continuation width 4: '世界' = 4 cols
+    // 'abc' = 3 cols, fits in 4
+    expect(lines).toEqual(['你好', '世界', 'abc']);
+  });
+
+  it('wide char wider than line does not infinite loop', () => {
+    // Width 1 cannot fit a CJK char (width 2), should push it anyway
+    const lines = wrapText('你', 1);
+    expect(lines).toEqual(['你']);
+  });
+
+  it('truncate-end with CJK', () => {
+    const root = createNode('root', {});
+    appendChild(root, text('你好世界abc', { wrap: 'truncate-end' }));
+    layout(root, 7, 24);
+    const t = root.children[0]!;
+    // Width 7, truncate: 6 available + ellipsis
+    // '你好世' = 6 cols, + '…' = 7 total
+    expect(t.layout!.wrappedLines!.length).toBe(1);
+    const line = t.layout!.wrappedLines![0]!.map(r => r.text).join('');
+    expect(line).toBe('你好世\u2026');
+  });
+
+  it('layout computes correct height for CJK', () => {
+    const root = createNode('root', {});
+    appendChild(root, text('你好世界'));
+    layout(root, 5, 24);
+    const t = root.children[0]!;
+    // '你好世界' = 8 cols in width 5:
+    // line 1: '你好' (4 cols), line 2: '世界' (4 cols)
+    expect(t.layout!.height).toBe(2);
+  });
+});

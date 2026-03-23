@@ -1,11 +1,12 @@
 import type { TNode, Segment, WrappedLine, StyledRun } from './nodes.js';
+import { stringDisplayWidth, sliceToWidth, sliceFromEndToWidth, charDisplayWidth, isTextPresentationEmoji } from '../width.js';
 
 function truncateText(
   text: string,
   width: number,
   mode: string,
 ): string {
-  if (text.length <= width) return text;
+  if (stringDisplayWidth(text) <= width) return text;
 
   const ellipsis = '\u2026';
   const availWidth = width - 1; // reserve space for ellipsis
@@ -15,13 +16,13 @@ function truncateText(
   switch (mode) {
     case 'truncate':
     case 'truncate-end':
-      return text.slice(0, availWidth) + ellipsis;
+      return sliceToWidth(text, availWidth) + ellipsis;
     case 'truncate-start':
-      return ellipsis + text.slice(text.length - availWidth);
+      return ellipsis + sliceFromEndToWidth(text, availWidth);
     case 'truncate-middle': {
       const half = Math.floor(availWidth / 2);
       const endLen = availWidth - half;
-      return text.slice(0, half) + ellipsis + text.slice(text.length - endLen);
+      return sliceToWidth(text, half) + ellipsis + sliceFromEndToWidth(text, endLen);
     }
     default:
       return text;
@@ -45,15 +46,49 @@ function wrapSingleLine(
   while (remaining.length > 0) {
     const lineWidth = isFirstLine ? width : Math.max(width - indent, 1);
 
-    if (remaining.length <= lineWidth) {
+    if (stringDisplayWidth(remaining) <= lineWidth) {
       lines.push(remaining);
       break;
     }
 
-    // Find last space at or before lineWidth (space at lineWidth can be consumed as break)
+    // Forward pass: find the string index where display width exceeds lineWidth
+    let cols = 0;
+    let overflowStrIdx = 0;
+    let prevCp: number | null = null;
+    let prevStrIdx = 0;
+    for (const ch of remaining) {
+      const cp = ch.codePointAt(0)!;
+      let w = charDisplayWidth(cp);
+      // VS16 after a width-1 text-presentation emoji upgrades it to width 2
+      if (cp === 0xfe0f && prevCp !== null && charDisplayWidth(prevCp) === 1 && isTextPresentationEmoji(prevCp)) {
+        w = 1;
+        if (cols + w > lineWidth) {
+          // VS16 upgrade overflows — break before the base character
+          overflowStrIdx = prevStrIdx;
+          break;
+        }
+      }
+      if (cols + w > lineWidth) break;
+      prevStrIdx = overflowStrIdx;
+      cols += w;
+      overflowStrIdx += ch.length;
+      prevCp = cp;
+    }
+
+    // Guard: first character is wider than the line (e.g. CJK char with lineWidth=1)
+    if (overflowStrIdx === 0) {
+      // Push it anyway — visually overflows by one column, but avoids infinite loop
+      const firstChar = [...remaining][0]!;
+      lines.push(firstChar);
+      remaining = remaining.slice(firstChar.length);
+      isFirstLine = false;
+      continue;
+    }
+
+    // Backward pass: scan for a space to break at (include overflowStrIdx —
+    // a space there can be consumed as a break without contributing to line width)
     let breakAt = -1;
-    const searchEnd = Math.min(lineWidth, remaining.length - 1);
-    for (let i = searchEnd; i >= 0; i--) {
+    for (let i = overflowStrIdx; i >= 0; i--) {
       if (remaining[i] === ' ') {
         breakAt = i;
         break;
@@ -62,8 +97,8 @@ function wrapSingleLine(
 
     if (breakAt === -1) {
       // Hard break mid-word
-      lines.push(remaining.slice(0, lineWidth));
-      remaining = remaining.slice(lineWidth);
+      lines.push(remaining.slice(0, overflowStrIdx));
+      remaining = remaining.slice(overflowStrIdx);
     } else {
       lines.push(remaining.slice(0, breakAt));
       // Consume the space at break point
@@ -192,7 +227,7 @@ function naturalWidth(node: TNode): number {
     let max = 0;
     for (const line of node.layout.wrappedLines) {
       let lineLen = 0;
-      for (const run of line) lineLen += run.text.length;
+      for (const run of line) lineLen += stringDisplayWidth(run.text);
       max = Math.max(max, lineLen);
     }
     return max;

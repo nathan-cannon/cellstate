@@ -30,6 +30,7 @@ export { markdownToElements } from './tui/markdown.js';
 export { highlightCode } from './tui/highlighter.js';
 export { measureElement } from './tui/measure.js';
 export type { ElementDimensions } from './tui/measure.js';
+export { charDisplayWidth, stringDisplayWidth, sliceToWidth, sliceFromEndToWidth } from './width.js';
 
 // ── Input handling ──
 export { decodeKeypress } from './tui/keypress.js';

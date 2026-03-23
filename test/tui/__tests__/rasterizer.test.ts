@@ -767,3 +767,208 @@ describe('per-line text alignment via alignItems', () => {
     expect(row).toBe('hi        ');
   });
 });
+
+describe('rasterizer — wide characters', () => {
+  it('CJK characters occupy 2 cells with continuation', () => {
+    const t = textNode('你好', {}, {
+      x: 0, y: 0, width: 10, height: 1, wrappedLines: [[{ text: '你好' }]],
+    });
+    const root = node('root', {}, { x: 0, y: 0, width: 10, height: 1 }, [t]);
+    const grid = rasterize(root, 10, 1);
+
+    // First CJK char: width 2
+    expect(grid.cells[0]![0]!.char).toBe('你');
+    expect(grid.cells[0]![0]!.width).toBe(2);
+    // Continuation cell
+    expect(grid.cells[0]![1]!.char).toBe('');
+    expect(grid.cells[0]![1]!.width).toBe(0);
+    // Second CJK char
+    expect(grid.cells[0]![2]!.char).toBe('好');
+    expect(grid.cells[0]![2]!.width).toBe(2);
+    expect(grid.cells[0]![3]!.char).toBe('');
+    expect(grid.cells[0]![3]!.width).toBe(0);
+  });
+
+  it('emoji (surrogate pairs) occupy 2 cells', () => {
+    const t = textNode('😀', {}, {
+      x: 0, y: 0, width: 10, height: 1, wrappedLines: [[{ text: '😀' }]],
+    });
+    const root = node('root', {}, { x: 0, y: 0, width: 10, height: 1 }, [t]);
+    const grid = rasterize(root, 10, 1);
+
+    expect(grid.cells[0]![0]!.char).toBe('😀');
+    expect(grid.cells[0]![0]!.width).toBe(2);
+    expect(grid.cells[0]![1]!.char).toBe('');
+    expect(grid.cells[0]![1]!.width).toBe(0);
+  });
+
+  it('mixed ASCII and CJK', () => {
+    const t = textNode('a你b', {}, {
+      x: 0, y: 0, width: 10, height: 1, wrappedLines: [[{ text: 'a你b' }]],
+    });
+    const root = node('root', {}, { x: 0, y: 0, width: 10, height: 1 }, [t]);
+    const grid = rasterize(root, 10, 1);
+
+    expect(grid.cells[0]![0]!.char).toBe('a');
+    expect(grid.cells[0]![0]!.width).toBe(1);
+    expect(grid.cells[0]![1]!.char).toBe('你');
+    expect(grid.cells[0]![1]!.width).toBe(2);
+    expect(grid.cells[0]![2]!.char).toBe('');
+    expect(grid.cells[0]![2]!.width).toBe(0);
+    expect(grid.cells[0]![3]!.char).toBe('b');
+    expect(grid.cells[0]![3]!.width).toBe(1);
+  });
+
+  it('wide char that does not fit at end of row leaves space', () => {
+    // Grid width 3, text '你好': first CJK (2 cols) fits, second (2 cols) does not
+    const t = textNode('你好', {}, {
+      x: 0, y: 0, width: 3, height: 1, wrappedLines: [[{ text: '你好' }]],
+    });
+    const root = node('root', {}, { x: 0, y: 0, width: 3, height: 1 }, [t]);
+    const grid = rasterize(root, 3, 1);
+
+    expect(grid.cells[0]![0]!.char).toBe('你');
+    expect(grid.cells[0]![0]!.width).toBe(2);
+    expect(grid.cells[0]![1]!.char).toBe('');
+    expect(grid.cells[0]![1]!.width).toBe(0);
+    // Last cell stays as default space — wide char didn't fit
+    expect(grid.cells[0]![2]!.char).toBe(' ');
+    expect(grid.cells[0]![2]!.width).toBe(1);
+  });
+
+  it('combining marks attach to previous cell', () => {
+    // e + combining acute accent = one cell
+    const t = textNode('e\u0301x', {}, {
+      x: 0, y: 0, width: 10, height: 1, wrappedLines: [[{ text: 'e\u0301x' }]],
+    });
+    const root = node('root', {}, { x: 0, y: 0, width: 10, height: 1 }, [t]);
+    const grid = rasterize(root, 10, 1);
+
+    expect(grid.cells[0]![0]!.char).toBe('e\u0301');
+    expect(grid.cells[0]![0]!.width).toBe(1);
+    expect(grid.cells[0]![1]!.char).toBe('x');
+    expect(grid.cells[0]![1]!.width).toBe(1);
+  });
+
+  it('center alignment accounts for display width', () => {
+    // Text '你好' = 4 display cols, in width 10 box with center alignment
+    const t = textNode('你好', {}, {
+      x: 0, y: 0, width: 10, height: 1,
+      wrappedLines: [[{ text: '你好' }]],
+      textAlign: 'center',
+    });
+    const root = node('root', {}, { x: 0, y: 0, width: 10, height: 1 }, [t]);
+    const grid = rasterize(root, 10, 1);
+
+    // slack = 10 - 4 = 6, offset = 3
+    expect(grid.cells[0]![3]!.char).toBe('你');
+    expect(grid.cells[0]![3]!.width).toBe(2);
+    expect(grid.cells[0]![5]!.char).toBe('好');
+    expect(grid.cells[0]![5]!.width).toBe(2);
+  });
+
+  it('CJK with styled segments', () => {
+    const t = textNode('', {
+      segments: [
+        { text: '你', style: { bold: true } },
+        { text: '好', style: { italic: true } },
+      ],
+    }, {
+      x: 0, y: 0, width: 10, height: 1,
+      wrappedLines: [[
+        { text: '你', style: { bold: true } },
+        { text: '好', style: { italic: true } },
+      ]],
+    });
+    const root = node('root', {}, { x: 0, y: 0, width: 10, height: 1 }, [t]);
+    const grid = rasterize(root, 10, 1);
+
+    // Bold CJK char
+    expect(grid.cells[0]![0]!.char).toBe('你');
+    expect(grid.cells[0]![0]!.width).toBe(2);
+    expect(grid.cells[0]![0]!.attrs & Attr.Bold).toBeTruthy();
+    // Its continuation cell should have same attrs
+    expect(grid.cells[0]![1]!.width).toBe(0);
+    expect(grid.cells[0]![1]!.attrs & Attr.Bold).toBeTruthy();
+    // Italic CJK char
+    expect(grid.cells[0]![2]!.char).toBe('好');
+    expect(grid.cells[0]![2]!.width).toBe(2);
+    expect(grid.cells[0]![2]!.attrs & Attr.Italic).toBeTruthy();
+  });
+
+  it('VS16 upgrades text-presentation emoji to width 2', () => {
+    // ☀️ = U+2600 + U+FE0F — text-presentation emoji upgraded by VS16
+    const t = textNode('', {}, {
+      x: 0, y: 0, width: 10, height: 1,
+      wrappedLines: [[{ text: '☀\uFE0F' }]],
+    });
+    const root = node('root', {}, { x: 0, y: 0, width: 10, height: 1 }, [t]);
+    const grid = rasterize(root, 10, 1);
+
+    expect(grid.cells[0]![0]!.char).toBe('☀\uFE0F');
+    expect(grid.cells[0]![0]!.width).toBe(2);
+    expect(grid.cells[0]![1]!.char).toBe('');
+    expect(grid.cells[0]![1]!.width).toBe(0);
+  });
+
+  it('text-presentation emoji without VS16 stays width 1', () => {
+    // ☀ = U+2600 alone — width 1
+    const t = textNode('', {}, {
+      x: 0, y: 0, width: 10, height: 1,
+      wrappedLines: [[{ text: '☀' }]],
+    });
+    const root = node('root', {}, { x: 0, y: 0, width: 10, height: 1 }, [t]);
+    const grid = rasterize(root, 10, 1);
+
+    expect(grid.cells[0]![0]!.char).toBe('☀');
+    expect(grid.cells[0]![0]!.width).toBe(1);
+    expect(grid.cells[0]![1]!.char).toBe(' '); // next cell is default space
+  });
+
+  it('VS16 at end of row with no room for continuation', () => {
+    // Grid width 1, text '☀\uFE0F': cell at col 0, no room at col 1 for continuation
+    const t = textNode('', {}, {
+      x: 0, y: 0, width: 1, height: 1,
+      wrappedLines: [[{ text: '☀\uFE0F' }]],
+    });
+    const root = node('root', {}, { x: 0, y: 0, width: 1, height: 1 }, [t]);
+    const grid = rasterize(root, 1, 1);
+
+    // VS16 appended to char but width stays 1 — no room for continuation
+    expect(grid.cells[0]![0]!.char).toBe('☀\uFE0F');
+    expect(grid.cells[0]![0]!.width).toBe(1);
+  });
+
+  it('emoji_presentation emoji are width 2 without VS16', () => {
+    // ⚡ U+26A1 — Emoji_Presentation=Yes, always width 2
+    const t = textNode('', {}, {
+      x: 0, y: 0, width: 10, height: 1,
+      wrappedLines: [[{ text: '⚡' }]],
+    });
+    const root = node('root', {}, { x: 0, y: 0, width: 10, height: 1 }, [t]);
+    const grid = rasterize(root, 10, 1);
+
+    expect(grid.cells[0]![0]!.char).toBe('⚡');
+    expect(grid.cells[0]![0]!.width).toBe(2);
+    expect(grid.cells[0]![1]!.width).toBe(0);
+  });
+
+  it('mixed text-presentation and emoji-presentation emoji', () => {
+    // ☀️⚡ = (U+2600 + U+FE0F) + U+26A1 = 2 + 2 = 4 columns
+    const t = textNode('', {}, {
+      x: 0, y: 0, width: 10, height: 1,
+      wrappedLines: [[{ text: '☀\uFE0F⚡' }]],
+    });
+    const root = node('root', {}, { x: 0, y: 0, width: 10, height: 1 }, [t]);
+    const grid = rasterize(root, 10, 1);
+
+    // ☀️ at col 0-1
+    expect(grid.cells[0]![0]!.char).toBe('☀\uFE0F');
+    expect(grid.cells[0]![0]!.width).toBe(2);
+    expect(grid.cells[0]![1]!.width).toBe(0);
+    // ⚡ at col 2-3
+    expect(grid.cells[0]![2]!.char).toBe('⚡');
+    expect(grid.cells[0]![2]!.width).toBe(2);
+    expect(grid.cells[0]![3]!.width).toBe(0);
+  });
+});

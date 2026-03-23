@@ -1,5 +1,6 @@
 import { createGrid, ColorMode, Attr, type CellGrid, type Color } from '../cell.js';
 import type { TNode, SegmentStyle } from './nodes.js';
+import { charDisplayWidth, stringDisplayWidth, isTextPresentationEmoji } from '../width.js';
 
 interface BorderChars {
   tl: string; tr: string; bl: string; br: string; h: string; v: string;
@@ -272,7 +273,7 @@ function rasterizeText(
     let xStart = xBase;
     if (textAlign === 'center' || textAlign === 'right') {
       let lineLen = 0;
-      for (const run of line) lineLen += run.text.length;
+      for (const run of line) lineLen += stringDisplayWidth(run.text);
       const slack = l.width - lineLen - (i === 0 ? 0 : hangingIndent);
       if (slack > 0) {
         xStart += textAlign === 'center' ? Math.floor(slack / 2) : slack;
@@ -280,20 +281,61 @@ function rasterizeText(
     }
 
     let col = xStart;
+    let prevCell: typeof grid.cells[0][0] | null = null;
     for (const run of line) {
       const runStyle = run.style ? mergeSegmentStyle(style, run.style) : style;
       const runFg = runStyle.fg;
       const runAttrs = styleAttrs(runStyle);
 
-      for (let j = 0; j < run.text.length; j++) {
+      for (const ch of run.text) {
+        const cp = ch.codePointAt(0)!;
+        const w = charDisplayWidth(cp);
+
+        if (w === 0) {
+          // Combining mark / ZWJ / variation selector: attach to previous cell
+          if (prevCell) {
+            prevCell.char += ch;
+            // VS16 (U+FE0F) upgrades text-presentation emoji to width 2
+            if (cp === 0xfe0f && prevCell.width === 1 && col < grid.width) {
+              const baseCp = prevCell.char.codePointAt(0);
+              if (baseCp !== undefined && isTextPresentationEmoji(baseCp)) {
+                prevCell.width = 2;
+                // Current col becomes continuation cell
+                const cont = grid.cells[row]![col]!;
+                cont.char = '';
+                cont.width = 0;
+                cont.attrs = runAttrs;
+                if (runFg) cont.fg = { ...runFg };
+                if (bg) cont.bg = { ...bg };
+                col++;
+              }
+            }
+          }
+          continue;
+        }
+
+        if (w === 2 && col + 2 > grid.width) break; // wide char won't fit
         if (col >= grid.width) break;
+
         const cell = grid.cells[row]![col]!;
-        cell.char = run.text[j]!;
-        cell.width = 1;
+        cell.char = ch;
+        cell.width = w;
         cell.attrs = runAttrs;
         if (runFg) cell.fg = { ...runFg };
         if (bg) cell.bg = { ...bg };
-        col++;
+        prevCell = cell;
+
+        if (w === 2) {
+          // Write continuation cell
+          const cont = grid.cells[row]![col + 1]!;
+          cont.char = '';
+          cont.width = 0;
+          cont.attrs = runAttrs;
+          if (runFg) cont.fg = { ...runFg };
+          if (bg) cont.bg = { ...bg };
+        }
+
+        col += w;
       }
     }
   }

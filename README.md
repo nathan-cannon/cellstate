@@ -24,6 +24,8 @@ React reconciler → layout → rasterize to cell grid → extract viewport → 
 
 Every frame renders the full content tree into an offscreen buffer. The viewport is extracted based on scroll position, then compared cell by cell against the previous frame. Only differences are written. Unchanged rows are skipped entirely. Within changed rows, SGR state tracking minimizes style changes: switching from bold red to bold blue emits one color change, not a full reset.
 
+CJK characters, emoji, and fullwidth Unicode are handled natively. The layout engine, rasterizer, and diff engine all operate on display width (terminal columns), not string length. Wide characters occupy two cells with proper continuation markers. Variation Selector 16 sequences (e.g. ☀️) are detected and widened correctly. Width tables are generated from Unicode 17.0 emoji data.
+
 Every frame is wrapped in DEC 2026 synchronized output sequences so terminals that support it paint atomically with zero tearing. Terminals without support silently ignore the sequences. Supported terminals: https://github.com/contour-terminal/vt-extensions/blob/master/synchronized-output.md
 
 Tested with 3,600+ property-based test iterations against xterm.js.
@@ -92,6 +94,7 @@ await app.waitUntilExit();
     - [highlightCode](#highlightcode)
     - [measureElement](#measureelement)
     - [decodeKeypress](#decodekeypress)
+    - [Display Width](#display-width)
 
 
 ## Getting Started
@@ -658,3 +661,32 @@ process.stdin.on('data', (data: Buffer) => {
 ```
 
 Handles UTF-8 (multi-byte characters, emoji, CJK), CSI escape sequences (arrows, Home, End, Delete), control bytes (Ctrl+letter), and bracketed paste sequences. SGR mouse sequences are consumed silently.
+
+### Display Width
+
+Measure and slice strings by terminal display width rather than string length. CJK characters and emoji occupy 2 columns, combining marks occupy 0. These are the same functions the layout engine uses internally.
+
+```tsx
+import { stringDisplayWidth, charDisplayWidth, sliceToWidth, sliceFromEndToWidth } from 'cellstate';
+
+stringDisplayWidth('hello');     // 5
+stringDisplayWidth('你好');       // 4  (2 columns each)
+stringDisplayWidth('😀');        // 2
+stringDisplayWidth('☀\uFE0F');   // 2  (VS16 upgrades to emoji presentation)
+stringDisplayWidth('e\u0301');   // 1  (combining mark is zero-width)
+
+charDisplayWidth(0x4E00);        // 2  (CJK ideograph)
+charDisplayWidth(0x1F680);       // 2  (rocket emoji)
+charDisplayWidth(0x0301);        // 0  (combining acute accent)
+charDisplayWidth(0x61);          // 1  (ASCII 'a')
+
+sliceToWidth('你好世界', 5);      // '你好'  (4 cols — next char would exceed 5)
+sliceFromEndToWidth('你好世界', 5); // '世界'  (4 cols from the end)
+```
+
+| Function | Description |
+|---|---|
+| `stringDisplayWidth(str)` | Total display width of a string in terminal columns |
+| `charDisplayWidth(codePoint)` | Display width of a single Unicode code point (0, 1, or 2) |
+| `sliceToWidth(text, maxCols)` | Slice from the start to fit within `maxCols` columns. Never splits wide characters or surrogate pairs |
+| `sliceFromEndToWidth(text, maxCols)` | Slice from the end to fit within `maxCols` columns |
