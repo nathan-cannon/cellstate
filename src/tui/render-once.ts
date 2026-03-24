@@ -2,7 +2,7 @@ import React from 'react';
 import { mountRoot } from './reconciler.js';
 import { layout, contentHeight } from './layout.js';
 import { rasterize } from './rasterizer.js';
-import { serializeRows } from '../diff.js';
+import { serializeRowsReflow } from '../diff.js';
 import type { TNode } from './nodes.js';
 
 export interface RenderOnceOptions {
@@ -27,7 +27,7 @@ export function renderOnce(
       }
 
       const grid = rasterize(root, cols, ch, 0);
-      const result = serializeRows(grid);
+      const result = serializeRowsReflow(grid);
       resolve(result.output);
     });
   });

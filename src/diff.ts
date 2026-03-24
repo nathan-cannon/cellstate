@@ -230,7 +230,16 @@ export interface DiffResult {
  *
  * Returns the ANSI string and the row/col where the cursor ends up.
  */
-export function serializeRows(grid: CellGrid): DiffResult {
+/**
+ * Internal helper: serialize grid rows to ANSI using a caller-supplied row
+ * separator function. Both `serializeRows` and `serializeRowsReflow` delegate
+ * to this so the cell-emission loop is shared.
+ */
+function serializeRowsCore(
+  grid: CellGrid,
+  emitRowSeparator: (curFg: Color, curBg: Color, curAttrs: number) => { seq: string; fg: Color; bg: Color; attrs: number },
+  trimTrailing?: boolean,
+): DiffResult {
   let out = '';
   let curRow = 0;
   let curCol = 0;
@@ -241,14 +250,18 @@ export function serializeRows(grid: CellGrid): DiffResult {
   const lastRow = lastContentRow(grid);
   for (let r = 0; r <= lastRow; r++) {
     if (r > 0) {
-      // Pending-wrap resolution: space triggers wrap to next row col 0,
-      // backspace moves cursor back to col 0. No \n — no hard line break.
-      out += ' \x08';
+      const sep = emitRowSeparator(curFg, curBg, curAttrs);
+      out += sep.seq;
+      curFg = sep.fg;
+      curBg = sep.bg;
+      curAttrs = sep.attrs;
       curRow = r;
       curCol = 0;
     }
 
-    for (let c = 0; c < grid.width; c++) {
+    const colEnd = trimTrailing ? lastContentCol(grid, r) : grid.width - 1;
+
+    for (let c = 0; c <= colEnd; c++) {
       const cell = grid.cells[r][c];
 
       // Skip wide-char continuation cells
@@ -272,6 +285,34 @@ export function serializeRows(grid: CellGrid): DiffResult {
   }
 
   return { output: out, endRow: curRow, endCol: curCol };
+}
+
+export function serializeRows(grid: CellGrid): DiffResult {
+  return serializeRowsCore(grid, (curFg, curBg, curAttrs) => ({
+    // Pending-wrap resolution: space triggers wrap to next row col 0,
+    // backspace moves cursor back to col 0. No \n — no hard line break.
+    seq: ' \x08',
+    fg: curFg,
+    bg: curBg,
+    attrs: curAttrs,
+  }));
+}
+
+/**
+ * Like serializeRows but uses real newlines between rows instead of
+ * pending-wrap (space+backspace). Resets SGR before each newline to prevent
+ * background color bleed on reflow. Used for exit repaint and static rendering.
+ */
+export function serializeRowsReflow(grid: CellGrid): DiffResult {
+  return serializeRowsCore(grid, (curFg, curBg, curAttrs) => {
+    const hasStyle = curAttrs !== 0 || curFg.mode !== ColorMode.Default || curBg.mode !== ColorMode.Default;
+    return {
+      seq: (hasStyle ? `${ESC}0m` : '') + '\n',
+      fg: hasStyle ? { ...DEFAULT_COLOR } : curFg,
+      bg: hasStyle ? { ...DEFAULT_COLOR } : curBg,
+      attrs: hasStyle ? 0 : curAttrs,
+    };
+  }, true);
 }
 
 export function fullRedraw(grid: CellGrid, cursorStartRow: number = grid.height - 1): DiffResult {
@@ -442,6 +483,21 @@ function isBlankRow(grid: CellGrid, row: number, width: number): boolean {
     ) return false;
   }
   return true;
+}
+
+/** Returns the index of the rightmost non-default cell in a row, or -1 if entirely blank. */
+function lastContentCol(grid: CellGrid, row: number): number {
+  for (let c = grid.width - 1; c >= 0; c--) {
+    const cell = grid.cells[row][c];
+    if (
+      cell.char !== ' ' ||
+      cell.width !== 1 ||
+      cell.fg.mode !== ColorMode.Default ||
+      cell.bg.mode !== ColorMode.Default ||
+      cell.attrs !== 0
+    ) return c;
+  }
+  return -1;
 }
 
 /** Returns true if every cell from startCol to width-1 is default (blank, no style). */

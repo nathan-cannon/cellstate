@@ -2,7 +2,7 @@ import type { TNode } from './nodes.js';
 import type { CellGrid } from '../cell.js';
 import { layout, contentHeight } from './layout.js';
 import { rasterize } from './rasterizer.js';
-import { diff, fullRedraw, lastContentRow, serializeRowRange, extractViewport } from '../diff.js';
+import { diff, fullRedraw, lastContentRow, serializeRowRange, serializeRowsReflow, extractViewport } from '../diff.js';
 import { mountRoot } from './reconciler.js';
 import { writeFileSync } from 'node:fs';
 
@@ -334,10 +334,30 @@ export function createFrameLoop(stdout: NodeJS.WriteStream): FrameLoop {
       }
       isFlushing = false;
       pendingRoot = null;
-      // Move cursor to bottom of viewport and advance past rendered content
-      // so the shell prompt appears on its own line.
+
+      const cols = stdout.columns ?? 80;
       const rows = stdout.rows ?? 24;
-      writeFileSync(1, `\x1b[${rows};1H\n` + CURSOR_SHOW);
+
+      if (lastRoot !== null) {
+        try {
+          layout(lastRoot, cols, rows);
+          const ch = contentHeight(lastRoot);
+          const grid = rasterize(lastRoot, cols, ch, 0);
+          const result = serializeRowsReflow(grid);
+          writeFileSync(
+            1,
+            CLEAR_SCREEN_SCROLLBACK_HOME +
+              result.output +
+              '\n' +
+              CURSOR_SHOW,
+          );
+        } catch {
+          // Repaint failed — fall back to safe exit
+          writeFileSync(1, `\x1b[${rows};1H\n` + CURSOR_SHOW);
+        }
+      } else {
+        writeFileSync(1, `\x1b[${rows};1H\n` + CURSOR_SHOW);
+      }
     },
 
     update(element: React.ReactElement): void {

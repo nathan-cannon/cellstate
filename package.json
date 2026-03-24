@@ -19,7 +19,8 @@
   "scripts": {
     "build": "rm -rf dist && tsc",
     "test": "bun test",
-    "prepublishOnly": "bun run build"
+    "prepublishOnly": "bun run build",
+    "dev:pack": "rm -f cellstate-*.tgz && npx tsc && npm pack"
   },
   "peerDependencies": {
     "react": "^19.0.0"
