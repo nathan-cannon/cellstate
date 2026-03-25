@@ -1,6 +1,7 @@
 node_modules/
 dist/
 *.tgz
+*.log
 .DS_Store
 data/width-test-results.json
-
+frame-debug.txt
