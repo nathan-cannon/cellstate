@@ -1,3 +1,4 @@
+/** @see https://cirw.in/blog/bracketed-paste */
 export interface KeypressEvent {
   type: 'char' | 'backspace' | 'delete' | 'enter' | 'left' | 'right' | 'home' | 'end' | 'up' | 'down' | 'ctrl' | 'paste' | 'tab' | 'shift-tab';
   char?: string;
@@ -16,7 +17,7 @@ export function decodeKeypress(data: Buffer): KeypressEvent[] {
     // Escape sequence
     if (code === 0x1b) {
       if (i + 1 < str.length && str.charCodeAt(i + 1) === 0x5b) {
-        // SGR mouse sequence: \x1b[< ... M/m — consume silently
+        // SGR mouse sequence: \x1b[< ... M/m, consume silently
         if (i + 2 < str.length && str.charCodeAt(i + 2) === 0x3c) {
           i += 3; // skip \x1b[<
           while (i < str.length) {
@@ -62,7 +63,7 @@ export function decodeKeypress(data: Buffer): KeypressEvent[] {
           }
         }
       } else {
-        // Bare escape — ignore
+        // Bare escape, ignore
         i++;
       }
       continue;
@@ -82,14 +83,15 @@ export function decodeKeypress(data: Buffer): KeypressEvent[] {
       continue;
     }
 
-    // Tab (0x09) — handle before ctrl range
+    // Tab (0x09), handle before ctrl range
     if (code === 0x09) {
       events.push({ type: 'tab' });
       i++;
       continue;
     }
 
-    // Ctrl+letter (0x01-0x1A)
+    // Ctrl+letter: terminal sends byte 0x01–0x1A for Ctrl+A through Ctrl+Z.
+    // Add 0x60 to recover the lowercase ASCII letter (e.g. 0x03 → 'c' for Ctrl+C).
     if (code >= 0x01 && code <= 0x1a) {
       events.push({ type: 'ctrl', ctrlKey: String.fromCharCode(code + 0x60) });
       i++;
@@ -105,7 +107,7 @@ export function decodeKeypress(data: Buffer): KeypressEvent[] {
       continue;
     }
 
-    // Unknown byte — skip
+    // Unknown byte, skip
     i++;
   }
 
@@ -126,7 +128,7 @@ export function onKeypress(
       pasteBuffer += str;
       const endIdx = pasteBuffer.indexOf('\x1b[201~');
       if (endIdx !== -1) {
-        // Paste complete — emit the paste event
+        // Paste complete, emit the paste event
         const pasteContent = pasteBuffer.slice(0, endIdx);
         const remaining = pasteBuffer.slice(endIdx + 6);
         pasteBuffer = null;
@@ -168,7 +170,7 @@ export function onKeypress(
           }
         }
       } else {
-        // Paste started but not ended — start buffering
+        // Paste started but not ended, start buffering
         pasteBuffer = afterStart;
       }
       return;

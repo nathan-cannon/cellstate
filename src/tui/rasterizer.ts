@@ -1,3 +1,4 @@
+/** Paints the laid-out TNode tree into a CellGrid. */
 import { createGrid, ColorMode, Attr, type CellGrid, type Color } from '../cell.js';
 import type { TNode, SegmentStyle } from './nodes.js';
 import { charDisplayWidth, stringDisplayWidth, isTextPresentationEmoji } from '../width.js';

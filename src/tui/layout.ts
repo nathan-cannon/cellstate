@@ -1,3 +1,7 @@
+/**
+ * Flexbox-inspired layout engine. Computes position and size for every TNode.
+ * All measurements are in terminal columns (display width), not string length.
+ */
 import type { TNode, Segment, WrappedLine, StyledRun } from './nodes.js';
 import { stringDisplayWidth, sliceToWidth, sliceFromEndToWidth, charDisplayWidth, isTextPresentationEmoji } from '../width.js';
 
@@ -51,7 +55,6 @@ function wrapSingleLine(
       break;
     }
 
-    // Forward pass: find the string index where display width exceeds lineWidth
     let cols = 0;
     let overflowStrIdx = 0;
     let prevCp: number | null = null;
@@ -63,7 +66,7 @@ function wrapSingleLine(
       if (cp === 0xfe0f && prevCp !== null && charDisplayWidth(prevCp) === 1 && isTextPresentationEmoji(prevCp)) {
         w = 1;
         if (cols + w > lineWidth) {
-          // VS16 upgrade overflows — break before the base character
+          // VS16 upgrade overflows, break before the base character
           overflowStrIdx = prevStrIdx;
           break;
         }
@@ -77,7 +80,7 @@ function wrapSingleLine(
 
     // Guard: first character is wider than the line (e.g. CJK char with lineWidth=1)
     if (overflowStrIdx === 0) {
-      // Push it anyway — visually overflows by one column, but avoids infinite loop
+      // Push it anyway. Visually overflows by one column, but avoids infinite loop.
       const firstChar = [...remaining][0]!;
       lines.push(firstChar);
       remaining = remaining.slice(firstChar.length);
@@ -85,7 +88,7 @@ function wrapSingleLine(
       continue;
     }
 
-    // Backward pass: scan for a space to break at (include overflowStrIdx —
+    // Backward pass: scan for a space to break at (include overflowStrIdx;
     // a space there can be consumed as a break without contributing to line width)
     let breakAt = -1;
     for (let i = overflowStrIdx; i >= 0; i--) {
@@ -125,13 +128,13 @@ export function wrapText(
 ): string[] {
   if (width <= 0 || !text) return [];
 
-  // Split on embedded newlines — each becomes a forced line break
+  // Split on embedded newlines. Each becomes a forced line break.
   const hardLines = text.split('\n');
   const result: string[] = [];
 
   for (const hardLine of hardLines) {
     if (hardLine.length === 0) {
-      // Empty segment between newlines — preserve as blank line
+      // Empty segment between newlines, preserve as blank line
       result.push('');
       continue;
     }
@@ -147,7 +150,7 @@ export function wrapText(
  * Wrap segments into styled lines. Uses wrapText for break-point calculation
  * on the concatenated plain text, then slices segments at those break points.
  */
-function wrapSegments(
+export function wrapSegments(
   segments: Segment[],
   width: number,
   hangingIndent?: number,
@@ -387,7 +390,7 @@ function applyAlignment(
 }
 
 /** Clear all layout fields in the tree before computing. */
-function clearLayout(node: TNode): void {
+export function clearLayout(node: TNode): void {
   node.layout = null;
   for (const child of node.children) {
     clearLayout(child);
@@ -669,7 +672,7 @@ function layoutTextNode(
     const wrapMode = node.props.wrap ?? 'wrap';
     if (wrapMode !== 'wrap' && wrappedLines.length > 1) {
       // Truncation collapses segments into plain text, losing per-segment styles.
-      // Acceptable for v1 — truncated text is typically short (file paths, labels).
+      // Acceptable for v1. Truncated text is typically short (file paths, labels).
       const fullText = wrappedLines.map(line =>
         line.map(run => run.text).join('')
       ).join(' ');

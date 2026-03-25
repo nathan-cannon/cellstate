@@ -1,4 +1,9 @@
 /**
+ * Cell grid primitives. A CellGrid is the shared data structure between the
+ * rasterizer (writes cells) and the diff engine (reads cells to produce ANSI).
+ */
+
+/**
  * Color mode matches xterm's internal representation:
  *   0 = default (terminal's default fg/bg)
  *   1 = palette (16 basic + 256 extended colors, value 0–255)

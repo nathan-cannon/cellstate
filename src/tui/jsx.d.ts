@@ -22,7 +22,7 @@ export interface StyleProps {
 }
 
 /**
- * Props for the `<box>` intrinsic element — a container node.
+ * Props for the `<box>` intrinsic element (a container node).
  *
  * Layout reads: flexDirection, gap, width, flexGrow, padding, paddingLeft, paddingRight, paddingTop, paddingBottom, margin, marginTop, marginBottom, marginLeft, marginRight, borderStyle.
  * Rasterizer reads: backgroundColor and all StyleProps.
@@ -78,7 +78,7 @@ export interface BoxProps extends StyleProps {
 }
 
 /**
- * Props for the `<text>` intrinsic element — a leaf text node.
+ * Props for the `<text>` intrinsic element (a leaf text node).
  *
  * Layout reads: segments, hangingIndent.
  * Rasterizer reads: segments (per-run styles) and all StyleProps.
@@ -104,7 +104,7 @@ export interface TextProps extends StyleProps {
  * 'react' module's JSX namespace so both paths pick up our types.
  *
  * @types/react declares <text> as SVGTextElementAttributes, and interface
- * merging is additive — we can't remove it. The merged `text` type becomes
+ * merging is additive, so we can't remove it. The merged `text` type becomes
  * the intersection of SVGTextElementAttributes and TextProps, so TypeScript
  * requires props to satisfy both. We augment SVGTextElementAttributes with
  * the exact props from TextProps so our custom props pass the check.

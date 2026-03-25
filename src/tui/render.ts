@@ -1,3 +1,4 @@
+/** Main entry point for terminal applications. */
 import React from 'react';
 import { createFrameLoop } from './frame-loop.js';
 import { AppCtx } from './app-context.js';
@@ -51,8 +52,8 @@ class ErrorBoundary extends React.Component<
  * Mount a React element into the terminal with the full rendering pipeline:
  * frame loop, raw mode, cursor management, and cleanup.
  *
- * Does NOT handle Ctrl+C, SIGINT, or any app-level signal handling —
- * the consumer is responsible for calling unmount() when appropriate.
+ * Does NOT handle Ctrl+C, SIGINT, or any app-level signal handling.
+ * The consumer is responsible for calling unmount() when appropriate.
  */
 export function render(
   element: React.ReactElement,
@@ -117,7 +118,9 @@ export function render(
   // Raw mode — process keypresses as raw bytes
   stdin.setRawMode(true);
   stdin.resume();
-  stdout.write('\x1b[?2004h'); // enable bracketed paste mode
+  // Bracketed paste: terminal wraps pasted text in escape sequences so
+  // the keypress decoder delivers it as a single 'paste' event.
+  stdout.write('\x1b[?2004h');
 
   const unpatchConsole = (options?.patchConsole !== false)
     ? patchConsole(stdout)
@@ -131,6 +134,8 @@ export function render(
     }
   }, stdin);
 
+  // Keep the Node.js event loop alive while the app is running.
+  // Without this, the process would exit after stdin is paused.
   const keepAlive = setInterval(() => {}, 60_000);
 
   // Restore cursor on any exit path (including process.exit from consumer)

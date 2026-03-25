@@ -1,3 +1,4 @@
+/** Programmatic focus control for app-driven focus changes (e.g. permission prompts). */
 import { useContext, useSyncExternalStore } from 'react';
 import { FocusCtx } from './focus-context.js';
 

@@ -1,3 +1,4 @@
+/** Hook to make a component focusable in the Tab cycling order. */
 import { useContext, useEffect, useId, useSyncExternalStore } from 'react';
 import { FocusCtx } from './focus-context.js';
 

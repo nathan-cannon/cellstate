@@ -1,3 +1,10 @@
+/**
+ * Cell-level diff engine and ANSI serialization.
+ *
+ * Compares two CellGrids and emits minimal ANSI to transform one into the
+ * other. Only uses relative cursor movements (CUU/CUD/CHA), not absolute
+ * CUP, so the output works in inline mode without an alternate screen.
+ */
 import {
   cellsEqual,
   colorsEqual,
@@ -22,6 +29,7 @@ export function lastContentRow(grid: CellGrid): number {
 }
 
 const ESC = "\x1b[";
+
 
 /** Convert our Color + attrs into an SGR escape sequence string. */
 export function styleToAnsi(fg: Color, bg: Color, attrs: number): string {
@@ -93,7 +101,7 @@ function colorSgrParams(color: Color, fgOrBg: 'fg' | 'bg'): string {
 /**
  * Compute the minimal SGR escape sequence to transition from one style to another.
  * Returns empty string if styles are identical, or a single \x1b[...m sequence.
- * Hot path — optimized with fast paths for common transitions.
+ * Hot path, optimized with fast paths for common transitions.
  */
 export function styleDelta(
   fromFg: Color, fromBg: Color, fromAttrs: number,
@@ -121,19 +129,21 @@ export function styleDelta(
     return `${ESC}${colorSgrParams(toBg, 'bg')}m`;
   }
 
-  // Fast path: from default — just emit full style (same as reset path minus the "0;")
+  // Fast path: from default. Just emit full style (same as reset path minus the "0;")
   if (fromAttrs === 0 && fromFg.mode === ColorMode.Default && fromBg.mode === ColorMode.Default) {
     return styleToAnsi(toFg, toBg, toAttrs);
   }
 
-  // --- General case: build targeted delta and reset path, pick shorter ---
+  // General case: build both a targeted delta and a full reset path, pick shorter.
   let delta = '';
 
   // Attr transitions
   const added = toAttrs & ~fromAttrs;
   const removed = fromAttrs & ~toAttrs;
 
-  // Bold/Dim share turn-off code 22
+  // Bold (SGR 1) and Dim (SGR 2) share the same turn-off code (SGR 22).
+  // When removing one while keeping the other, we must emit 22 first
+  // (turning both off) then re-enable the one we want to keep.
   const removedBoldDim = removed & 0x11;
   if (removedBoldDim) {
     delta = '22';
@@ -182,7 +192,7 @@ export function styleDelta(
 /**
  * Emit relative cursor movement from (fromRow, fromCol) to (toRow, toCol).
  * Uses CUU/CUD for vertical, CHA (\x1b[nG) for horizontal.
- * CHA is column-absolute within the current line — safe in inline mode.
+ * CHA is column-absolute within the current line, so it's safe in inline mode.
  */
 function moveCursor(
   fromRow: number,
@@ -204,32 +214,6 @@ export interface DiffResult {
   endCol: number;
 }
 
-/**
- * Produce a full redraw sequence using only relative cursor movements.
- * `cursorStartRow` tells how many rows above the current cursor row 0 is.
- * Defaults to grid.height - 1 (cursor at the bottom of the owned region)
- * for backward compatibility with tests that seed a VirtualScreen.
- * On the first real frame, pass 0 so we don't overshoot above the app's
- * starting position.
- *
- * Returns { output, endRow, endCol } — the ANSI string and where the cursor
- * ends up after writing it. The caller is responsible for any final cursor
- * positioning (e.g. moving to the bottom of the owned region).
- */
-/**
- * Serialize grid rows to ANSI. Only rows 0..lastContentRow are emitted.
- * No cursor preamble — caller positions cursor before calling.
- *
- * Row separator uses pending-wrap resolution: after writing all cells of a
- * row the terminal cursor is in pending-wrap state (we always fill every
- * column). A space character triggers the natural wrap to the next row;
- * the backspace then moves the cursor back to column 0 of that new row.
- * This avoids \n (which creates hard line-breaks in the terminal buffer)
- * while still causing terminal scrolls when the cursor is at the viewport
- * bottom — matching Claude Code's pending-wrap technique.
- *
- * Returns the ANSI string and the row/col where the cursor ends up.
- */
 /**
  * Internal helper: serialize grid rows to ANSI using a caller-supplied row
  * separator function. Both `serializeRows` and `serializeRowsReflow` delegate
@@ -290,7 +274,7 @@ function serializeRowsCore(
 export function serializeRows(grid: CellGrid): DiffResult {
   return serializeRowsCore(grid, (curFg, curBg, curAttrs) => ({
     // Pending-wrap resolution: space triggers wrap to next row col 0,
-    // backspace moves cursor back to col 0. No \n — no hard line break.
+    // backspace moves cursor back to col 0. No \n, no hard line break.
     seq: ' \x08',
     fg: curFg,
     bg: curBg,
@@ -320,7 +304,7 @@ export function fullRedraw(grid: CellGrid, cursorStartRow: number = grid.height 
 
   // Move from current cursor row to the top of the owned region
   if (cursorStartRow > 0) preamble += `${ESC}${cursorStartRow}A`;
-  preamble += `${ESC}G`; // column 1 (CHA — within-line absolute, safe)
+  preamble += `${ESC}G`; // column 1 (CHA, within-line absolute, safe)
 
   const body = serializeRowsFull(grid);
   return {
@@ -389,7 +373,7 @@ function serializeRowsFull(grid: CellGrid): DiffResult {
 /**
  * Emit rows startRow through endRow-1 from grid using pending-wrap row
  * advancement (space+backspace). ALL rows in the range are emitted
- * unconditionally — including blank rows — so terminal content is correct
+ * unconditionally (including blank rows) so terminal content is correct
  * before those rows scroll into scrollback. No cursor preamble.
  *
  * Returns { output, endRow, endCol } where endRow/endCol are relative to
@@ -551,11 +535,11 @@ export function diff(
   let styleKnown = false;
 
   for (let r = 0; r < height; r++) {
-    // Check 1: Skip unchanged rows entirely — avoids all cell comparisons for
+    // Check 1: Skip unchanged rows entirely. Avoids all cell comparisons for
     // the common case where most rows don't change between frames.
     if (rowsEqual(prev, next, r, width)) { skippedRows++; continue; }
 
-    // Check 2: Entire next row is blank but prev had content — bulk erase line.
+    // Check 2: Entire next row is blank but prev had content; bulk erase line.
     if (isBlankRow(next, r, width)) {
       if (curRow !== r || curCol !== 0) {
         out += moveCursor(curRow, curCol, r, 0);
@@ -571,7 +555,7 @@ export function diff(
       }
       styleKnown = true;
       out += `${ESC}2K`;
-      // curCol stays at 0 — EL doesn't move cursor
+      // curCol stays at 0; EL doesn't move cursor
       erasedRows++;
       continue;
     }
@@ -589,13 +573,13 @@ export function diff(
           if (cellsEqual(prev.cells[r][c + 1], next.cells[r][c + 1])) {
             continue;
           }
-          // Continuation changed — need to rewrite the wide char
+          // Continuation changed, need to rewrite the wide char
         } else {
           continue;
         }
       }
 
-      // Check 3: Changed cell is blank and all remaining cells are blank —
+      // Check 3: Changed cell is blank and all remaining cells are blank.
       // erase to end of line instead of writing individual blank cells.
       if (
         nCell.char === ' ' &&
@@ -632,7 +616,7 @@ export function diff(
 
       // Set style if needed
       if (!styleKnown) {
-        // First cell: unknown terminal state — must do full emit
+        // First cell: unknown terminal state, must do full emit
         out += `${ESC}0m`;
         if (
           nCell.attrs !== 0 ||

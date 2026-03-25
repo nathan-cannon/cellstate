@@ -1,3 +1,8 @@
+/**
+ * React reconciler adapter. Translates React's host config calls (createInstance,
+ * appendChild, commitUpdate, etc.) into TNode mutations. After each commit,
+ * resetAfterCommit fires the onFrame callback to trigger a render frame.
+ */
 import createReconciler from 'react-reconciler';
 import {
   ConcurrentRoot,
@@ -16,7 +21,7 @@ import {
 
 let currentUpdatePriority = NoEventPriority;
 
-// Store the onFrame callback per root node
+// WeakMap so root nodes can be GC'd when the frame loop stops.
 const onFrameCallbacks = new WeakMap<TNode, (root: TNode) => void>();
 
 type HostContext = Record<string, never>;
@@ -71,6 +76,8 @@ const reconciler = createReconciler({
     node.children = node.children.filter((c) => c.text === null);
   },
 
+  // Strip React's `children` prop since child relationships are managed
+  // via appendChild/removeChild, not through props.
   commitUpdate(node: TNode, _type: string, _oldProps: any, newProps: any) {
     const { children: _, ...rest } = newProps;
     node.props = rest;

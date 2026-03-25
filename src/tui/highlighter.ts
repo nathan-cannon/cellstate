@@ -1,3 +1,7 @@
+/**
+ * Synchronous syntax highlighter (Shiki, Nord theme). Pre-loads all language
+ * grammars at import time. Uses the JS regex engine for zero native deps.
+ */
 import { createHighlighterCoreSync } from 'shiki/core';
 import { createJavaScriptRegexEngine } from 'shiki/engine/javascript';
 import type { HighlighterCore } from 'shiki/core';
@@ -52,6 +56,8 @@ export function highlightCode(code: string, lang: string): Segment[][] | null {
       if (token.content === '') continue;
       const style: SegmentStyle = {};
       if (token.color) style.fg = token.color;
+      // Shiki uses a bitmask for font styles: 1=italic, 2=bold, 4=underline.
+      // These match the TextMate grammar convention, not our Attr enum.
       if (token.fontStyle) {
         if (token.fontStyle & 1) style.italic = true;
         if (token.fontStyle & 2) style.bold = true;

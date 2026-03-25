@@ -1,3 +1,7 @@
+/**
+ * Redirects console.log/info/warn/error/debug to stderr so they don't
+ * corrupt the rendered frame on stdout. Returns a cleanup function.
+ */
 import util from 'node:util';
 
 export function patchConsole(stdout: NodeJS.WriteStream): () => void {

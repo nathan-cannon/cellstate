@@ -1,3 +1,4 @@
+/** Reads an xterm.js Terminal buffer into a CellGrid. */
 import type { IBufferNamespace } from "@xterm/headless";
 import {
   createGrid,
@@ -7,12 +8,12 @@ import {
   type Color,
 } from "../src/cell.js";
 
-/**
- * Map xterm's internal color mode constants to our ColorMode enum.
- */
+// xterm.js exposes color modes as large integer constants (bitfield tags).
+// These values come from xterm's internal AttributeData representation
+// and are not documented in the public API.
 const XTERM_CM_DEFAULT = 0;
 const XTERM_CM_PALETTE = 33554432; // 0x2000000
-const XTERM_CM_RGB = 50331648; // 0x3000000
+const XTERM_CM_RGB = 50331648;     // 0x3000000
 
 function toColor(value: number, mode: number): Color {
   if (mode === XTERM_CM_DEFAULT || value < 0) return { ...DEFAULT_COLOR };

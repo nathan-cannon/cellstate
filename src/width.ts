@@ -1,6 +1,6 @@
 /**
- * Unicode display width utilities for terminal rendering.
- * Determines how many terminal columns a character occupies.
+ * Unicode display width: how many terminal columns a character occupies (0, 1, or 2).
+ * Width tables derived from Unicode 17.0 data (see scripts/generate-emoji-widths.ts).
  */
 
 import { EMOJI_PRESENTATION_RANGES, TEXT_PRESENTATION_EMOJI_RANGES } from './emoji-data.gen.js';
@@ -27,8 +27,9 @@ function inRanges(cp: number, ranges: [number, number][]): boolean {
 export function charDisplayWidth(codePoint: number): number {
   // Zero-width characters
   if (isZeroWidth(codePoint)) return 0;
-  // Terminal-specific overrides: Japanese button emoji that terminals render as width 2
-  // despite not having Emoji_Presentation=Yes in Unicode data
+  // Terminal-specific overrides: these Japanese button emoji (🈂 🈷) are rendered as
+  // width 2 by most terminals despite having Emoji_Presentation=No in Unicode data.
+  // Verified against iTerm2, Terminal.app, and kitty via test-terminal-widths.ts.
   if (codePoint === 0x1f202 || codePoint === 0x1f237) return 2;
   // Wide / fullwidth characters
   if (isWide(codePoint)) return 2;

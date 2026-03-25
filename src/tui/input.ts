@@ -1,3 +1,7 @@
+/**
+ * Stateful single-line text input. Pure function: takes current state +
+ * keypress, returns new state. No side effects or React dependency.
+ */
 import type { KeypressEvent } from './keypress.js';
 
 export type InputState = {

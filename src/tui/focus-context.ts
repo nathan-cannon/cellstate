@@ -1,3 +1,4 @@
+/** Focus registry for Tab/Shift-Tab cycling. Tab events forwarded from render.ts. */
 import { createContext } from 'react';
 
 interface FocusEntry {

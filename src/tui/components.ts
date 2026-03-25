@@ -1,3 +1,8 @@
+/**
+ * JSX component exports. These are string literals cast to React.FC for type
+ * checking. The reconciler maps the strings to TNode creation; there are no
+ * actual component functions, similar to how React DOM handles 'div'/'span'.
+ */
 import React from 'react';
 import type { BoxProps, TextProps } from './jsx.js';
 

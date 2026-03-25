@@ -1,3 +1,5 @@
+/** Runs the pipeline once and returns a styled ANSI string. Uses real newlines
+ *  so output is safe to pipe or capture in tests. */
 import React from 'react';
 import { mountRoot } from './reconciler.js';
 import { layout, contentHeight } from './layout.js';

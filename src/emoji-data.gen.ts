@@ -1,4 +1,4 @@
-// Auto-generated from Unicode 17.0 emoji-data.txt — do not edit manually
+// Auto-generated from Unicode 17.0 emoji-data.txt. Do not edit manually.
 // Regenerate with: npx tsx scripts/generate-emoji-widths.ts > src/emoji-data.gen.ts
 
 /** Code point ranges where Emoji_Presentation=Yes. Always width 2. */

@@ -1,3 +1,4 @@
+/** Markdown to Box/Text tree converter. Fenced code blocks highlighted via Shiki. */
 import React from 'react';
 import { unified } from 'unified';
 import remarkParse from 'remark-parse';

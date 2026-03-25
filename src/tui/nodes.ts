@@ -17,7 +17,9 @@ export interface Segment {
   style?: SegmentStyle;
 }
 
+/** A styled run after text wrapping. Same shape as Segment, named for clarity in layout. */
 export type StyledRun = { text: string; style?: SegmentStyle };
+
 export type WrappedLine = StyledRun[];
 
 export interface LayoutResult {

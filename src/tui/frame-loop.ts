@@ -1,3 +1,8 @@
+/**
+ * Frame loop: layout > rasterize > viewport extract > diff > ANSI output.
+ * Handles three frame types: update (diff only), growth (scrollback push +
+ * redraw), and full redraw (resize or content shrink).
+ */
 import type { TNode } from './nodes.js';
 import type { CellGrid } from '../cell.js';
 import { layout, contentHeight } from './layout.js';
@@ -11,17 +16,17 @@ export interface FrameLoop {
   stop: () => void;
   update: (element: React.ReactElement) => void;
   getGrid: () => CellGrid | null;
-  /** Exposed for testing — how many rows have been pushed into terminal scrollback. */
   getScrollbackLines: () => number;
-  /** Write a snapshot of current frame loop state to a file for debugging. */
   dumpFrameLog: (path: string) => void;
 }
 
-const DEC_2026_ON = '\x1b[?2026h';
-const DEC_2026_OFF = '\x1b[?2026l';
-const CURSOR_HIDE = '\x1b[?25l';
-const CURSOR_SHOW = '\x1b[?25h';
-const CLEAR_SCREEN_SCROLLBACK_HOME = '\x1b[2J\x1b[3J\x1b[H';
+// Terminal control sequences used throughout the frame loop.
+// DEC 2026 wraps frame output so supporting terminals paint atomically.
+const DEC_2026_ON = '\x1b[?2026h';   // Begin synchronized update
+const DEC_2026_OFF = '\x1b[?2026l';  // End synchronized update, terminal flushes
+const CURSOR_HIDE = '\x1b[?25l';     // DECTCEM: hide cursor
+const CURSOR_SHOW = '\x1b[?25h';     // DECTCEM: restore cursor visibility
+const CLEAR_SCREEN_SCROLLBACK_HOME = '\x1b[2J\x1b[3J\x1b[H'; // Clear viewport + scrollback + home
 
 
 export function createFrameLoop(stdout: NodeJS.WriteStream): FrameLoop {
@@ -56,18 +61,18 @@ export function createFrameLoop(stdout: NodeJS.WriteStream): FrameLoop {
     const desiredScrollback = Math.max(0, actualHeight - rows);
 
     if (desiredScrollback < scrollbackRows) {
-      // Scrollback contains rows that no longer exist — must clear and rebuild
+      // Scrollback contains rows that no longer exist; must clear and rebuild
       doFullRedraw(root, cols, rows);
       return;
     }
 
     if (desiredScrollback > scrollbackRows) {
-      // Content grew past viewport — growth frame
+      // Content grew past viewport, growth frame
       doGrowthFrame(cols, rows, fullGrid, actualHeight, desiredScrollback);
       return;
     }
 
-    // No scrollback change — update frame
+    // No scrollback change, update frame
     doUpdateFrame(cols, rows, fullGrid, actualHeight, desiredScrollback);
   }
 
@@ -76,14 +81,14 @@ export function createFrameLoop(stdout: NodeJS.WriteStream): FrameLoop {
     cols: number,
     rows: number,
   ): void {
-    // Reset stale state — growthInner sets the real scrollbackRows value below
+    // Reset stale state. growthInner sets the real scrollbackRows value below.
     scrollbackRows = 0;
     prevGrid = null;
 
     const ch = contentHeight(root);
 
     if (ch <= 0) {
-      // Nothing to draw — just clear
+      // Nothing to draw, just clear
       const output = DEC_2026_ON + CLEAR_SCREEN_SCROLLBACK_HOME + CURSOR_HIDE + DEC_2026_OFF;
       const ok = stdout.write(output);
       if (!ok) isFlushing = true;
@@ -203,7 +208,7 @@ export function createFrameLoop(stdout: NodeJS.WriteStream): FrameLoop {
 
     let result: { output: string; endRow: number; endCol: number };
     if (prevGrid === null) {
-      // prevGrid is null after resize — fall back to full viewport redraw
+      // prevGrid is null after resize, fall back to full viewport redraw
       result = fullRedraw(viewportGrid, 0);
     } else {
       result = diff(prevGrid, viewportGrid, 0, 0);
@@ -260,7 +265,7 @@ export function createFrameLoop(stdout: NodeJS.WriteStream): FrameLoop {
     // If no timer running, start one. The short delay batches rapid
     // React commits (from SSE events arriving in separate read() calls)
     // into a single rendered frame showing the final state.
-    // The timer is NEVER reset — new commits just update pendingRoot.
+    // The timer is NEVER reset. New commits just update pendingRoot.
     if (frameTimer === null) {
       frameTimer = setTimeout(flushFrame, 8);
     }
@@ -276,7 +281,7 @@ export function createFrameLoop(stdout: NodeJS.WriteStream): FrameLoop {
   function onResize(): void {
     const oldScrollback = scrollbackRows;
 
-    // Cancel any pending frame — resize does its own full redraw
+    // Cancel any pending frame; resize does its own full redraw
     if (frameTimer !== null) {
       clearTimeout(frameTimer);
       frameTimer = null;
@@ -327,7 +332,7 @@ export function createFrameLoop(stdout: NodeJS.WriteStream): FrameLoop {
         stdout.off('drain', drainListener);
         drainListener = null;
       }
-      // Kill flush guard state — teardown is unconditional, not a frame.
+      // Kill flush guard state. Teardown is unconditional, not a frame.
       if (frameTimer !== null) {
         clearTimeout(frameTimer);
         frameTimer = null;
@@ -352,7 +357,7 @@ export function createFrameLoop(stdout: NodeJS.WriteStream): FrameLoop {
               CURSOR_SHOW,
           );
         } catch {
-          // Repaint failed — fall back to safe exit
+          // Repaint failed, fall back to safe exit
           writeFileSync(1, `\x1b[${rows};1H\n` + CURSOR_SHOW);
         }
       } else {
