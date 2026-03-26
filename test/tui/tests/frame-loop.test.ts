@@ -141,7 +141,7 @@ describe('frame-loop', () => {
   });
 
   it('DEC 2026 wrapping on every frame write', async () => {
-    const loop = createFrameLoop(stdout as any);
+    const loop = createFrameLoop(stdout as any, { synchronizedOutput: true });
     loop.start(React.createElement('text', null, 'wrapped'));
     await flushReact();
     loop.stop();
@@ -437,7 +437,7 @@ describe('frame-loop — growth frames', () => {
   });
 
   it('frame after growth uses diff', async () => {
-    const loop = createFrameLoop(stdout as any);
+    const loop = createFrameLoop(stdout as any, { synchronizedOutput: true });
     loop.start(makeLines(13));
     await flushReact();
 
@@ -927,5 +927,82 @@ describe('frame-loop — properties', () => {
       expect(chunk).not.toContain('\x1b[2J');
       expect(chunk).not.toContain('\x1b[3J');
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Capability integration tests
+// ---------------------------------------------------------------------------
+
+describe('frame-loop — capabilities integration', () => {
+  let stdout: MockStdout;
+
+  beforeEach(() => {
+    stdout = createMockStdout(40, 10);
+  });
+
+  it('synchronizedOutput: false — output does NOT contain DEC 2026 sequences', async () => {
+    const loop = createFrameLoop(stdout as any, { synchronizedOutput: false });
+    loop.start(React.createElement('text', null, 'no sync'));
+    await flushReact();
+    loop.stop();
+
+    const all = stdout.written.join('');
+    expect(all).not.toContain('\x1b[?2026h');
+    expect(all).not.toContain('\x1b[?2026l');
+    // Content should still render
+    expect(all).toContain('no sync');
+  });
+
+  it('synchronizedOutput: true — output DOES contain DEC 2026 sequences', async () => {
+    const loop = createFrameLoop(stdout as any, { synchronizedOutput: true });
+    loop.start(React.createElement('text', null, 'with sync'));
+    await flushReact();
+    loop.stop();
+
+    const frameWrites = stdout.written.filter(
+      (chunk) => chunk !== '\x1b[?25l' && !chunk.includes('\x1b[?25h'),
+    );
+    expect(frameWrites.length).toBeGreaterThanOrEqual(1);
+    const all = frameWrites.join('');
+    expect(all).toContain('\x1b[?2026h');
+    expect(all).toContain('\x1b[?2026l');
+  });
+
+  it('no capabilities arg — backward compatible, still works', async () => {
+    const loop = createFrameLoop(stdout as any);
+    loop.start(React.createElement('text', null, 'default caps'));
+    await flushReact();
+    loop.stop();
+
+    const all = stdout.written.join('');
+    expect(all).toContain('default caps');
+  });
+
+  it('partial capabilities — only overrides provided fields', async () => {
+    // Only override synchronizedOutput, leave everything else to detection
+    const loop = createFrameLoop(stdout as any, { synchronizedOutput: false });
+    loop.start(React.createElement('text', null, 'partial'));
+    await flushReact();
+    loop.stop();
+
+    const all = stdout.written.join('');
+    expect(all).not.toContain('\x1b[?2026h');
+    expect(all).toContain('partial');
+  });
+
+  it('synchronizedOutput: false — update frames also omit DEC 2026', async () => {
+    const loop = createFrameLoop(stdout as any, { synchronizedOutput: false });
+    loop.start(React.createElement('text', null, 'hello'));
+    await flushReact();
+
+    const writesAfterFirst = stdout.written.length;
+    loop.update(React.createElement('text', null, 'world'));
+    await flushReact();
+    loop.stop();
+
+    const updateOutput = stdout.written.slice(writesAfterFirst).join('');
+    expect(updateOutput).not.toContain('\x1b[?2026h');
+    expect(updateOutput).not.toContain('\x1b[?2026l');
   });
 });

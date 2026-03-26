@@ -1,11 +1,8 @@
 import { describe, test, expect, afterEach } from "bun:test";
-import chalk from "chalk";
 import { VirtualScreen } from "../virtual-screen.js";
 import { gridToDebugString, ColorMode } from "../../src/cell.js";
-import { renderMarkdown } from "./markdown-helper.js";
-
-// Force chalk to emit color even without a TTY
-chalk.level = 3;
+import { renderOnce } from "../../src/tui/render-once.js";
+import { markdownToElements } from "../../src/tui/markdown.js";
 
 describe("VirtualScreen", () => {
   let screen: VirtualScreen;
@@ -39,16 +36,17 @@ describe("VirtualScreen", () => {
     expect(lines[2]).toBe("line3");
   });
 
-  test("simulated Ink frames: partial rewrite preserves other lines", async () => {
+  test("styled frames: partial rewrite preserves other lines", async () => {
     screen = new VirtualScreen(80, 24);
 
-    // Frame 1: three styled lines
+    // Frame 1: three styled lines using raw ANSI
+    // Bold red "Header Line", green "Middle content here", blue italic "Footer info"
     const frame1 =
-      chalk.bold.red("Header Line") +
+      "\x1b[1;31mHeader Line\x1b[0m" +
       "\r\n" +
-      chalk.green("Middle content here") +
+      "\x1b[32mMiddle content here\x1b[0m" +
       "\r\n" +
-      chalk.blue.italic("Footer info");
+      "\x1b[3;34mFooter info\x1b[0m";
     await screen.write(frame1);
 
     // Read and snapshot lines 0 and 2
@@ -56,12 +54,12 @@ describe("VirtualScreen", () => {
     const row0Before = grid1.cells[0].slice(0, 11); // "Header Line"
     const row2Before = grid1.cells[2].slice(0, 11); // "Footer info"
 
-    // Verify line 0 has bold + red
+    // Verify line 0 has bold + red (palette color 1)
     expect(row0Before[0].fg.mode).toBe(ColorMode.Palette);
     expect(row0Before[0].attrs & 1).toBe(1); // bold
 
     // Frame 2: only rewrite line 2 (row index 1, 1-based = row 2)
-    await screen.write("\x1b[2;1H\x1b[2K" + chalk.yellow("Updated middle"));
+    await screen.write("\x1b[2;1H\x1b[2K\x1b[33mUpdated middle\x1b[0m");
 
     const grid2 = screen.readGrid();
 
@@ -122,7 +120,7 @@ describe("VirtualScreen", () => {
     expect(row0HasContent).toBe(false);
   });
 
-  test("integration with renderMarkdown", async () => {
+  test("integration with CellState renderOnce", async () => {
     screen = new VirtualScreen(80, 60);
 
     const md1 = [
@@ -135,7 +133,7 @@ describe("VirtualScreen", () => {
       "```",
     ].join("\n");
 
-    const ansi1 = renderMarkdown(md1);
+    const ansi1 = await renderOnce(markdownToElements(md1), { columns: 80 });
     await screen.write(ansi1);
 
     const grid1 = screen.readGrid();
@@ -160,7 +158,7 @@ describe("VirtualScreen", () => {
       "- beta",
     ].join("\n");
 
-    const ansi2 = renderMarkdown(md2);
+    const ansi2 = await renderOnce(markdownToElements(md2), { columns: 80 });
     // Cursor home + erase screen, then new content
     await screen.write("\x1b[H\x1b[2J" + ansi2);
 

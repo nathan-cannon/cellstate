@@ -4,7 +4,8 @@ import XtermHeadless from "@xterm/headless";
 const { Terminal } = XtermHeadless;
 import { parseAnsi } from "../ansi-parser.js";
 import { ColorMode, Attr } from "../../src/cell.js";
-import { renderMarkdown } from "./markdown-helper.js";
+import { renderOnce } from "../../src/tui/render-once.js";
+import { markdownToElements } from "../../src/tui/markdown.js";
 
 describe("parseAnsi", () => {
   test("plain text", () => {
@@ -139,7 +140,7 @@ describe("parseAnsi", () => {
     expect(cell.fg.value).toBe((100 << 16) | (200 << 8) | 50);
   });
 
-  // ── renderMarkdown through parseAnsi ───────────────────────
+  // ── CellState renderOnce output through parseAnsi ──────────
 
   const markdownSample = [
     "# Heading",
@@ -156,8 +157,8 @@ describe("parseAnsi", () => {
     "- item three",
   ].join("\n");
 
-  test("renderMarkdown at 80 cols", () => {
-    const ansi = renderMarkdown(markdownSample);
+  test("renderOnce markdown at 80 cols", async () => {
+    const ansi = await renderOnce(markdownToElements(markdownSample), { columns: 80 });
     const grid = parseAnsi(ansi, 80, 40);
 
     // Should not crash and should produce non-empty cells
@@ -176,8 +177,8 @@ describe("parseAnsi", () => {
     expect(debugText).toContain("Heading");
   });
 
-  test("renderMarkdown at 40 cols", () => {
-    const ansi = renderMarkdown(markdownSample);
+  test("renderOnce markdown at 40 cols", async () => {
+    const ansi = await renderOnce(markdownToElements(markdownSample), { columns: 40 });
     const grid = parseAnsi(ansi, 40, 60);
 
     let nonEmpty = 0;

@@ -35,3 +35,7 @@ export { charDisplayWidth, stringDisplayWidth, sliceToWidth, sliceFromEndToWidth
 // ── Input handling ──
 export { decodeKeypress } from './tui/keypress.js';
 export type { KeypressEvent } from './tui/keypress.js';
+
+// ── Terminal capabilities ──
+export { detectCapabilities } from './tui/capabilities.js';
+export type { TerminalCapabilities } from './tui/capabilities.js';

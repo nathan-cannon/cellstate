@@ -10,6 +10,7 @@ import { rasterize } from './rasterizer.js';
 import { diff, fullRedraw, lastContentRow, serializeRowRange, serializeRowsReflow, extractViewport } from '../diff.js';
 import { mountRoot } from './reconciler.js';
 import { writeFileSync } from 'node:fs';
+import { detectCapabilities, type TerminalCapabilities } from './capabilities.js';
 
 export interface FrameLoop {
   start: (element: React.ReactElement) => void;
@@ -20,16 +21,24 @@ export interface FrameLoop {
   dumpFrameLog: (path: string) => void;
 }
 
-// Terminal control sequences used throughout the frame loop.
-// DEC 2026 wraps frame output so supporting terminals paint atomically.
-const DEC_2026_ON = '\x1b[?2026h';   // Begin synchronized update
-const DEC_2026_OFF = '\x1b[?2026l';  // End synchronized update, terminal flushes
+// Terminal control sequences (non-capability-dependent).
 const CURSOR_HIDE = '\x1b[?25l';     // DECTCEM: hide cursor
 const CURSOR_SHOW = '\x1b[?25h';     // DECTCEM: restore cursor visibility
 const CLEAR_SCREEN_SCROLLBACK_HOME = '\x1b[2J\x1b[3J\x1b[H'; // Clear viewport + scrollback + home
 
 
-export function createFrameLoop(stdout: NodeJS.WriteStream): FrameLoop {
+export function createFrameLoop(
+  stdout: NodeJS.WriteStream,
+  capabilities?: Partial<TerminalCapabilities>,
+): FrameLoop {
+  // Merge caller-provided overrides with detected capabilities.
+  const caps = { ...detectCapabilities(), ...capabilities };
+
+  // DEC 2026 wraps frame output so supporting terminals paint atomically.
+  // Terminals that don't recognize mode 2026 silently ignore the sequences,
+  // but multiplexers (tmux, screen) and Mosh can't pass them through.
+  const DEC_2026_ON = caps.synchronizedOutput ? '\x1b[?2026h' : '';
+  const DEC_2026_OFF = caps.synchronizedOutput ? '\x1b[?2026l' : '';
   let prevGrid: CellGrid | null = null;
   let lastGrid: CellGrid | null = null;
   let updateHandle: ((el: React.ReactElement) => void) | null = null;

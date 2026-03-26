@@ -7,11 +7,13 @@ import { onKeypress } from './keypress.js';
 import { patchConsole } from './patch-console.js';
 import { writeFileSync } from 'node:fs';
 import type tty from 'node:tty';
+import type { TerminalCapabilities } from './capabilities.js';
 
 export interface RenderOptions {
   stdout?: tty.WriteStream;
   stdin?: tty.ReadStream;
   patchConsole?: boolean;
+  capabilities?: Partial<TerminalCapabilities>;
 }
 
 export interface RenderInstance {
@@ -70,7 +72,7 @@ export function render(
     exitReject = reject;
   });
 
-  const loop = createFrameLoop(stdout);
+  const loop = createFrameLoop(stdout, options?.capabilities);
 
   function handleError(error: Error): void {
     // Restore terminal state before printing
