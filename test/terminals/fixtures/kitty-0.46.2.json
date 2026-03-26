@@ -1,10 +1,10 @@
 {
-  "terminal": "konsole",
-  "version": "23.08.5",
-  "timestamp": "2026-03-26T23:10:42.075Z",
+  "terminal": "kitty",
+  "version": "0.46.2",
+  "timestamp": "2026-03-26T23:52:57.943Z",
   "platform": "linux",
   "env": {
-    "TERM": "xterm-256color",
+    "TERM": "xterm-kitty",
     "COLORTERM": "truecolor"
   },
   "widths": [
@@ -418,7 +418,7 @@
       ],
       "actualPos": [
         15,
-        109
+        71
       ],
       "detail": "Write space at last column + backspace triggers pending wrap"
     }
