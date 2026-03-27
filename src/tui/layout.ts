@@ -3,7 +3,7 @@
  * All measurements are in terminal columns (display width), not string length.
  */
 import type { TNode, Segment, WrappedLine, StyledRun } from './nodes.js';
-import { stringDisplayWidth, sliceToWidth, sliceFromEndToWidth, charDisplayWidth, isTextPresentationEmoji } from '../width.js';
+import { stringDisplayWidth, sliceToWidth, sliceFromEndToWidth, charDisplayWidth, isTextPresentationEmoji, isSkinToneModifier, isRegionalIndicator } from '../width.js';
 
 function truncateText(
   text: string,
@@ -59,22 +59,47 @@ function wrapSingleLine(
     let overflowStrIdx = 0;
     let prevCp: number | null = null;
     let prevStrIdx = 0;
+    let prevWasZWJ = false;
+    let prevWasRI = false;
+    let clusterStartStrIdx = 0;
     for (const ch of remaining) {
       const cp = ch.codePointAt(0)!;
       let w = charDisplayWidth(cp);
+      let partOfCluster = false;
       // VS16 after a width-1 text-presentation emoji upgrades it to width 2
       if (cp === 0xfe0f && prevCp !== null && charDisplayWidth(prevCp) === 1 && isTextPresentationEmoji(prevCp)) {
         w = 1;
+        partOfCluster = true;
         if (cols + w > lineWidth) {
           // VS16 upgrade overflows, break before the base character
-          overflowStrIdx = prevStrIdx;
+          overflowStrIdx = clusterStartStrIdx;
           break;
         }
+      } else if (isSkinToneModifier(cp) && prevCp !== null && charDisplayWidth(prevCp) === 2) {
+        w = 0;
+        partOfCluster = true;
+      } else if (isRegionalIndicator(cp) && prevWasRI) {
+        w = 0;
+        partOfCluster = true;
+      } else if (prevWasZWJ && w === 2) {
+        w = 0;
+        partOfCluster = true;
       }
-      if (cols + w > lineWidth) break;
+      if (cols + w > lineWidth) {
+        if (partOfCluster) {
+          // Cluster overflows — break before the entire cluster
+          overflowStrIdx = clusterStartStrIdx;
+        }
+        break;
+      }
+      if (!partOfCluster) {
+        clusterStartStrIdx = overflowStrIdx;
+      }
       prevStrIdx = overflowStrIdx;
       cols += w;
       overflowStrIdx += ch.length;
+      prevWasZWJ = cp === 0x200d;
+      prevWasRI = isRegionalIndicator(cp) && !partOfCluster;
       prevCp = cp;
     }
 

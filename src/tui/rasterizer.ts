@@ -1,7 +1,7 @@
 /** Paints the laid-out TNode tree into a CellGrid. */
 import { createGrid, ColorMode, Attr, type CellGrid, type Color } from '../cell.js';
 import type { TNode, SegmentStyle } from './nodes.js';
-import { charDisplayWidth, stringDisplayWidth, isTextPresentationEmoji } from '../width.js';
+import { charDisplayWidth, stringDisplayWidth, isTextPresentationEmoji, isSkinToneModifier, isRegionalIndicator } from '../width.js';
 
 interface BorderChars {
   tl: string; tr: string; bl: string; br: string; h: string; v: string;
@@ -288,9 +288,30 @@ function rasterizeText(
       const runFg = runStyle.fg;
       const runAttrs = styleAttrs(runStyle);
 
+      let prevWasZWJ = false;
+      let prevWasRI = false;
       for (const ch of run.text) {
         const cp = ch.codePointAt(0)!;
-        const w = charDisplayWidth(cp);
+        let w = charDisplayWidth(cp);
+
+        // Grapheme cluster awareness: skin tone, ZWJ sequences, regional indicator pairs
+        let clusterAppend = false;
+        if (w === 2 && prevCell) {
+          if (isSkinToneModifier(cp) && prevCell.width === 2) {
+            clusterAppend = true;
+          } else if (isRegionalIndicator(cp) && prevWasRI) {
+            clusterAppend = true;
+          } else if (prevWasZWJ) {
+            clusterAppend = true;
+          }
+        }
+
+        if (clusterAppend) {
+          prevCell!.char += ch;
+          prevWasZWJ = false;
+          prevWasRI = false;
+          continue;
+        }
 
         if (w === 0) {
           // Combining mark / ZWJ / variation selector: attach to previous cell
@@ -312,6 +333,8 @@ function rasterizeText(
               }
             }
           }
+          prevWasZWJ = cp === 0x200d;
+          prevWasRI = false;
           continue;
         }
 
@@ -337,6 +360,8 @@ function rasterizeText(
         }
 
         col += w;
+        prevWasZWJ = false;
+        prevWasRI = isRegionalIndicator(cp);
       }
     }
   }

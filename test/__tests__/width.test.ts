@@ -233,6 +233,52 @@ describe('isTextPresentationEmoji', () => {
   });
 });
 
+describe('stringDisplayWidth grapheme clusters', () => {
+  it('skin tone modifier', () => {
+    expect(stringDisplayWidth('👋🏽')).toBe(2);
+  });
+
+  it('ZWJ sequence', () => {
+    expect(stringDisplayWidth('👨‍💻')).toBe(2);
+    expect(stringDisplayWidth('👩‍🔬')).toBe(2);
+  });
+
+  it('regional indicator flag', () => {
+    expect(stringDisplayWidth('🇺🇸')).toBe(2);
+    expect(stringDisplayWidth('🇯🇵')).toBe(2);
+  });
+
+  it('three regional indicators = flag + standalone', () => {
+    // First two pair into a flag (width 2), third is standalone (width 2)
+    expect(stringDisplayWidth('🇺🇸🇯')).toBe(4);
+  });
+
+  it('ZWJ at end of string (dangling)', () => {
+    expect(stringDisplayWidth('👨\u200D')).toBe(2);
+  });
+
+  it('multiple ZWJ sequences', () => {
+    // 👨‍👩‍👧 = family emoji
+    expect(stringDisplayWidth('👨\u200D👩\u200D👧')).toBe(2);
+  });
+
+  it('skin tone on non-emoji (should not cluster)', () => {
+    expect(stringDisplayWidth('A\u{1F3FD}')).toBe(3);
+  });
+});
+
+describe('sliceToWidth with grapheme clusters', () => {
+  it('slices around ZWJ sequence', () => {
+    expect(sliceToWidth('AB👨‍💻CD', 4)).toBe('AB👨‍💻');
+    expect(sliceToWidth('AB👨‍💻CD', 3)).toBe('AB');
+  });
+
+  it('slices around flag', () => {
+    expect(sliceToWidth('🇺🇸hello', 2)).toBe('🇺🇸');
+    expect(sliceToWidth('🇺🇸hello', 1)).toBe('');
+  });
+});
+
 describe('stringDisplayWidth with VS16', () => {
   it('text-presentation emoji + VS16 = width 2', () => {
     // ☀️ = U+2600 + U+FE0F

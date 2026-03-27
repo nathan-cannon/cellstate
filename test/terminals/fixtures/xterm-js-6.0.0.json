@@ -1,7 +1,7 @@
 {
   "terminal": "xterm-js",
   "version": "6.0.0",
-  "timestamp": "2026-03-26T22:07:21.518Z",
+  "timestamp": "2026-03-27T00:19:22.119Z",
   "platform": "linux",
   "env": {
     "TERM": "xterm-256color",
@@ -205,41 +205,41 @@
       "char": "👋🏽",
       "codePoints": "U+1F44B U+1F3FD",
       "category": "skin_tone",
-      "cellstateWidth": 4,
+      "cellstateWidth": 2,
       "terminalWidth": 2,
-      "match": false
+      "match": true
     },
     {
       "char": "👨‍💻",
       "codePoints": "U+1F468 U+200D U+1F4BB",
       "category": "zwj_sequence",
-      "cellstateWidth": 4,
+      "cellstateWidth": 2,
       "terminalWidth": 2,
-      "match": false
+      "match": true
     },
     {
       "char": "👩‍🔬",
       "codePoints": "U+1F469 U+200D U+1F52C",
       "category": "zwj_sequence",
-      "cellstateWidth": 4,
+      "cellstateWidth": 2,
       "terminalWidth": 2,
-      "match": false
+      "match": true
     },
     {
       "char": "🇺🇸",
       "codePoints": "U+1F1FA U+1F1F8",
       "category": "regional_flag",
-      "cellstateWidth": 4,
+      "cellstateWidth": 2,
       "terminalWidth": 2,
-      "match": false
+      "match": true
     },
     {
       "char": "🇯🇵",
       "codePoints": "U+1F1EF U+1F1F5",
       "category": "regional_flag",
-      "cellstateWidth": 4,
+      "cellstateWidth": 2,
       "terminalWidth": 2,
-      "match": false
+      "match": true
     },
     {
       "char": "🈂",
