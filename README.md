@@ -28,7 +28,7 @@ CJK characters, emoji, and fullwidth Unicode are handled natively. The layout en
 
 Every frame is wrapped in DEC 2026 synchronized output sequences so terminals that support it paint atomically with zero tearing. Terminals without support silently ignore the sequences. Supported terminals: https://github.com/contour-terminal/vt-extensions/blob/master/synchronized-output.md
 
-Tested with 4,000+ property-based test iterations against xterm.js.
+Tested with 4,300+ property-based test iterations against xterm.js. 808 tests across the full rendering pipeline, with cross-terminal verification against Windows Terminal, kitty, and Ghostty.
 
 
 ## Performance
