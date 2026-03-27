@@ -1,7 +1,7 @@
 {
   "terminal": "iterm2",
   "version": "3.6.9",
-  "timestamp": "2026-03-27T00:53:49.941Z",
+  "timestamp": "2026-03-27T22:28:46.378Z",
   "platform": "darwin",
   "env": {
     "TERM": "xterm-256color",
@@ -412,14 +412,14 @@
     },
     {
       "name": "pending_wrap",
-      "pass": false,
+      "pass": true,
       "expectedPos": [
         16,
         1
       ],
       "actualPos": [
-        15,
-        79
+        16,
+        1
       ],
       "detail": "Write space at last column + backspace triggers pending wrap"
     }

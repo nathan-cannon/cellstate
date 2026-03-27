@@ -1,7 +1,7 @@
 {
   "terminal": "terminal-app",
-  "version": "26.3.1",
-  "timestamp": "2026-03-27T00:47:43.127Z",
+  "version": "2.15",
+  "timestamp": "2026-03-27T22:32:18.998Z",
   "platform": "darwin",
   "env": {
     "TERM": "xterm-256color",
@@ -412,14 +412,14 @@
     },
     {
       "name": "pending_wrap",
-      "pass": false,
+      "pass": true,
       "expectedPos": [
         16,
         1
       ],
       "actualPos": [
-        15,
-        119
+        16,
+        1
       ],
       "detail": "Write space at last column + backspace triggers pending wrap"
     }
