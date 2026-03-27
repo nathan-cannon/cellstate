@@ -77,7 +77,9 @@ function formatRanges(ranges: [number, number][]): string {
 const emoji = parseSection('Emoji');
 const emojiPresentation = parseSection('Emoji_Presentation');
 
-// Compute text-presentation emoji: in Emoji but NOT in Emoji_Presentation
+// Text-presentation emoji are width 1 by default but become width 2 when
+// followed by VS16 (U+FE0F). We need this set separately from Emoji_Presentation
+// (which is always width 2) so the width functions can detect the VS16 upgrade.
 const textPresentationPoints = new Set<number>();
 for (const cp of emoji.points) {
   if (!emojiPresentation.points.has(cp)) {

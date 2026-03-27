@@ -68,6 +68,12 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/**
+ * Measure the actual display width of a character by writing it and
+ * querying the cursor position via DSR (Device Status Report).
+ * The terminal responds with \x1b[row;colR — the column tells us
+ * how many cells the character occupied (col - 1, since col is 1-based).
+ */
 function measureWidth(char: string, timeoutMs = 500): Promise<number | null> {
   return new Promise((resolve) => {
     let settled = false;
