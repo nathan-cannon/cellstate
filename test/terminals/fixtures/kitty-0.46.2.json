@@ -1,7 +1,7 @@
 {
   "terminal": "kitty",
   "version": "0.46.2",
-  "timestamp": "2026-03-26T23:52:57.943Z",
+  "timestamp": "2026-03-27T22:08:05.430Z",
   "platform": "linux",
   "env": {
     "TERM": "xterm-kitty",
@@ -411,14 +411,14 @@
     },
     {
       "name": "pending_wrap",
-      "pass": false,
+      "pass": true,
       "expectedPos": [
         16,
         1
       ],
       "actualPos": [
-        15,
-        71
+        16,
+        1
       ],
       "detail": "Write space at last column + backspace triggers pending wrap"
     }

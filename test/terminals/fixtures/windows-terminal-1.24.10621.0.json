@@ -1,7 +1,7 @@
 {
   "terminal": "windows-terminal",
   "version": "1.24.10621.0",
-  "timestamp": "2026-03-26T22:47:56.806Z",
+  "timestamp": "2026-03-27T22:19:52.118Z",
   "platform": "linux",
   "env": {
     "TERM": "xterm-256color"
@@ -410,14 +410,14 @@
     },
     {
       "name": "pending_wrap",
-      "pass": false,
+      "pass": true,
       "expectedPos": [
         16,
         1
       ],
       "actualPos": [
-        15,
-        117
+        16,
+        1
       ],
       "detail": "Write space at last column + backspace triggers pending wrap"
     }

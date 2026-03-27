@@ -266,7 +266,7 @@ async function runCursorTests(): Promise<CursorResult[]> {
 
   // Pending wrap
   moveTo(15, 1);
-  write(`${CSI}${cols}G`);
+  write(`${CSI}${cols}GX`);
   write(' \x08');
   pos = await queryCursorPosition();
   results.push({

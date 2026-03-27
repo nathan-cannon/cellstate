@@ -213,7 +213,7 @@ function runCursorTests(): CursorResult[] {
   // Pending wrap
   {
     const term = new Terminal({ cols, rows: 40, allowProposedApi: true });
-    (term as any)._core.writeSync(`${CSI}15;1H${CSI}${cols}G \x08`);
+    (term as any)._core.writeSync(`${CSI}15;1H${CSI}${cols}GX \x08`);
     const row = term.buffer.active.cursorY + 1;
     const col = term.buffer.active.cursorX + 1;
     const pass = row === 16 && col === 1;
