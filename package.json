@@ -1,6 +1,6 @@
 {
   "name": "cellstate",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "React terminal renderer with cell-level diffing, double-buffered rendering, and native scrollback. No alternate screen.",
   "type": "module",
   "main": "dist/index.js",
