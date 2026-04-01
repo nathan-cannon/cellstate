@@ -8,7 +8,7 @@
   <a href="https://github.com/nathan-cannon/cellstate/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue" alt="License: MIT"></a>
 </p>
 
-<p align="center">Built on the architecture behind Claude Code's rendering rewrite.</p>
+<p align="center"><em>Inspired by <a href="https://github.com/anthropics/claude-code/issues/769#issuecomment-3667315590">this comment on terminal rendering</a> from the Claude Code team.</em></p>
 
 ---
 
