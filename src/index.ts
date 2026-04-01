@@ -4,7 +4,11 @@ export type { RenderInstance, RenderOptions } from './tui/render.js';
 export { renderOnce } from './tui/render-once.js';
 export type { RenderOnceOptions } from './tui/render-once.js';
 export { createFrameLoop } from './tui/frame-loop.js';
-export type { FrameLoop } from './tui/frame-loop.js';
+export type { FrameLoop, FrameLoopOptions } from './tui/frame-loop.js';
+
+// ── Performance instrumentation ──
+export { createPerf } from './perf.js';
+export type { Perf, PerfSnapshot, PerfCounts, PerfTimings } from './perf.js';
 
 // ── JSX element types ──
 export { Box, Text, Divider } from './tui/components.js';

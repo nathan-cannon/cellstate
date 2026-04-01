@@ -2,6 +2,7 @@
 import { createGrid, ColorMode, Attr, type CellGrid, type Color } from '../cell.js';
 import type { TNode, SegmentStyle } from './nodes.js';
 import { charDisplayWidth, stringDisplayWidth, isTextPresentationEmoji, isSkinToneModifier, isRegionalIndicator } from '../width.js';
+import type { Perf } from '../perf.js';
 
 interface BorderChars {
   tl: string; tr: string; bl: string; br: string; h: string; v: string;
@@ -97,9 +98,10 @@ export function rasterize(
   width: number,
   height: number,
   scrollOffset: number = 0,
+  perf?: Perf,
 ): CellGrid {
-  const grid = createGrid(width, height);
-  walkNode(root, {}, grid, scrollOffset, false);
+  const grid = createGrid(width, height, perf);
+  walkNode(root, {}, grid, scrollOffset, false, perf);
   return grid;
 }
 
@@ -109,6 +111,7 @@ function walkNode(
   grid: CellGrid,
   scrollOffset: number,
   skipScrollOffset: boolean,
+  perf?: Perf,
 ): void {
   if (!node.layout) return;
   if (node.props.display === 'none') return;
@@ -124,10 +127,20 @@ function walkNode(
     if (l.y - effectiveOffset >= grid.height) return; // entirely below
   }
 
+  // Count node types
+  if (perf) {
+    switch (node.type) {
+      case 'root': perf.count('walkNodeRoot'); break;
+      case 'box': perf.count('walkNodeBox'); break;
+      case 'text': perf.count('walkNodeText'); break;
+      case 'divider': perf.count('walkNodeDivider'); break;
+    }
+  }
+
   const style = mergeStyle(inherited, node.props);
 
   if (node.type === 'text') {
-    rasterizeText(node, style, grid, effectiveOffset);
+    rasterizeText(node, style, grid, effectiveOffset, perf);
     return;
   }
 
@@ -149,15 +162,15 @@ function walkNode(
 
   // Box or root: fill background if set, draw border, then recurse children
   if (node.props.backgroundColor) {
-    fillBackground(node, parseColor(node.props.backgroundColor)!, grid, effectiveOffset);
+    fillBackground(node, parseColor(node.props.backgroundColor)!, grid, effectiveOffset, perf);
   }
 
   if (node.props.borderStyle) {
-    drawBorder(node, style, grid, effectiveOffset);
+    drawBorder(node, style, grid, effectiveOffset, perf);
   }
 
   for (const child of node.children) {
-    walkNode(child, style, grid, scrollOffset, skipScrollOffset);
+    walkNode(child, style, grid, scrollOffset, skipScrollOffset, perf);
   }
 }
 
@@ -166,10 +179,18 @@ function drawBorder(
   style: StyleContext,
   grid: CellGrid,
   scrollOffset: number,
+  perf?: Perf,
 ): void {
+  if (perf) {
+    perf.count('drawBorderCalls');
+    perf.timeStart('drawBorder');
+  }
   const l = node.layout!;
   const chars = BORDER_STYLES[node.props.borderStyle as string];
-  if (!chars) return;
+  if (!chars) {
+    if (perf) perf.timeEnd('drawBorder');
+    return;
+  }
 
   const fg = parseColor(node.props.borderColor) ?? style.fg;
   const bg = style.bg ?? parseColor(node.props.backgroundColor);
@@ -179,6 +200,8 @@ function drawBorder(
   const leftCol = l.x;
   const rightCol = l.x + l.width - 1;
 
+  let borderCellCount = 0;
+
   function setCell(row: number, col: number, ch: string): void {
     if (row < 0 || row >= grid.height || col < 0 || col >= grid.width) return;
     const cell = grid.cells[row]![col]!;
@@ -186,6 +209,7 @@ function drawBorder(
     cell.width = 1;
     if (fg) cell.fg = { ...fg };
     if (bg) cell.bg = { ...bg };
+    borderCellCount++;
   }
 
   // Top edge
@@ -212,6 +236,11 @@ function drawBorder(
     setCell(r, leftCol, chars.v);
     setCell(r, rightCol, chars.v);
   }
+
+  if (perf) {
+    perf.count('borderCells', borderCellCount);
+    perf.timeEnd('drawBorder');
+  }
 }
 
 function fillBackground(
@@ -219,16 +248,28 @@ function fillBackground(
   bg: Color,
   grid: CellGrid,
   scrollOffset: number,
+  perf?: Perf,
 ): void {
+  if (perf) {
+    perf.count('fillBackgroundCalls');
+    perf.timeStart('fillBackground');
+  }
   const l = node.layout!;
   const startRow = Math.max(l.y - scrollOffset, 0);
   const endRow = Math.min(l.y + l.height - scrollOffset, grid.height);
 
+  let bgCellCount = 0;
   for (let row = startRow; row < endRow; row++) {
     for (let col = l.x; col < l.x + l.width; col++) {
       if (col >= grid.width) break;
       grid.cells[row]![col]!.bg = { ...bg };
+      bgCellCount++;
     }
+  }
+
+  if (perf) {
+    perf.count('bgFillCells', bgCellCount);
+    perf.timeEnd('fillBackground');
   }
 }
 
@@ -237,10 +278,18 @@ function rasterizeText(
   style: StyleContext,
   grid: CellGrid,
   scrollOffset: number,
+  perf?: Perf,
 ): void {
+  if (perf) {
+    perf.count('rasterizeTextCalls');
+    perf.timeStart('rasterizeText');
+  }
   const l = node.layout!;
   const lines = l.wrappedLines;
-  if (!lines || lines.length === 0) return;
+  if (!lines || lines.length === 0) {
+    if (perf) perf.timeEnd('rasterizeText');
+    return;
+  }
 
   const bg = style.bg ?? parseColor(node.props.backgroundColor);
 
@@ -263,6 +312,14 @@ function rasterizeText(
 
   const textAlign = l.textAlign;
 
+  // Local counters for hot-loop metrics, flushed to perf at the end
+  let cellsWritten = 0;
+  let continuationCells = 0;
+  let vs16Count = 0;
+  let skinToneCount = 0;
+  let riCount = 0;
+  let zwjCount = 0;
+
   for (let i = clippedLines; i < lines.length; i++) {
     const row = l.y + i - scrollOffset;
     if (row >= grid.height) break;
@@ -274,7 +331,10 @@ function rasterizeText(
     let xStart = xBase;
     if (textAlign === 'center' || textAlign === 'right') {
       let lineLen = 0;
-      for (const run of line) lineLen += stringDisplayWidth(run.text);
+      for (const run of line) {
+        if (perf) perf.count('stringDisplayWidthCalls');
+        lineLen += stringDisplayWidth(run.text);
+      }
       const slack = l.width - lineLen - (i === 0 ? 0 : hangingIndent);
       if (slack > 0) {
         xStart += textAlign === 'center' ? Math.floor(slack / 2) : slack;
@@ -299,10 +359,13 @@ function rasterizeText(
         if (w === 2 && prevCell) {
           if (isSkinToneModifier(cp) && prevCell.width === 2) {
             clusterAppend = true;
+            skinToneCount++;
           } else if (isRegionalIndicator(cp) && prevWasRI) {
             clusterAppend = true;
+            riCount++;
           } else if (prevWasZWJ) {
             clusterAppend = true;
+            zwjCount++;
           }
         }
 
@@ -322,6 +385,7 @@ function rasterizeText(
               const baseCp = prevCell.char.codePointAt(0);
               if (baseCp !== undefined && isTextPresentationEmoji(baseCp)) {
                 prevCell.width = 2;
+                vs16Count++;
                 // Current col becomes continuation cell
                 const cont = grid.cells[row]![col]!;
                 cont.char = '';
@@ -329,6 +393,7 @@ function rasterizeText(
                 cont.attrs = runAttrs;
                 if (runFg) cont.fg = { ...runFg };
                 if (bg) cont.bg = { ...bg };
+                continuationCells++;
                 col++;
               }
             }
@@ -348,6 +413,7 @@ function rasterizeText(
         if (runFg) cell.fg = { ...runFg };
         if (bg) cell.bg = { ...bg };
         prevCell = cell;
+        cellsWritten++;
 
         if (w === 2) {
           // Write continuation cell
@@ -357,6 +423,7 @@ function rasterizeText(
           cont.attrs = runAttrs;
           if (runFg) cont.fg = { ...runFg };
           if (bg) cont.bg = { ...bg };
+          continuationCells++;
         }
 
         col += w;
@@ -364,5 +431,15 @@ function rasterizeText(
         prevWasRI = isRegionalIndicator(cp);
       }
     }
+  }
+
+  if (perf) {
+    perf.count('cellsWritten', cellsWritten);
+    perf.count('continuationCellsWritten', continuationCells);
+    if (vs16Count) perf.count('vs16Upgrades', vs16Count);
+    if (skinToneCount) perf.count('skinToneJoins', skinToneCount);
+    if (riCount) perf.count('regionalIndicatorJoins', riCount);
+    if (zwjCount) perf.count('zwjJoins', zwjCount);
+    perf.timeEnd('rasterizeText');
   }
 }

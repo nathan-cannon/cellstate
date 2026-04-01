@@ -4,33 +4,58 @@
  */
 import type { TNode, Segment, WrappedLine, StyledRun } from './nodes.js';
 import { stringDisplayWidth, sliceToWidth, sliceFromEndToWidth, charDisplayWidth, isTextPresentationEmoji, isSkinToneModifier, isRegionalIndicator } from '../width.js';
+import type { Perf } from '../perf.js';
 
 function truncateText(
   text: string,
   width: number,
   mode: string,
+  perf?: Perf,
 ): string {
-  if (stringDisplayWidth(text) <= width) return text;
+  if (perf) {
+    perf.count('truncateTextCalls');
+    perf.timeStart('truncateText');
+    perf.count('stringDisplayWidthCalls');
+  }
+  if (stringDisplayWidth(text) <= width) {
+    if (perf) perf.timeEnd('truncateText');
+    return text;
+  }
 
   const ellipsis = '\u2026';
   const availWidth = width - 1; // reserve space for ellipsis
 
-  if (availWidth <= 0) return ellipsis.slice(0, width);
+  if (availWidth <= 0) {
+    if (perf) perf.timeEnd('truncateText');
+    return ellipsis.slice(0, width);
+  }
 
+  let result: string;
   switch (mode) {
     case 'truncate':
     case 'truncate-end':
-      return sliceToWidth(text, availWidth) + ellipsis;
+      if (perf) perf.count('sliceToWidthCalls');
+      result = sliceToWidth(text, availWidth) + ellipsis;
+      break;
     case 'truncate-start':
-      return ellipsis + sliceFromEndToWidth(text, availWidth);
+      if (perf) perf.count('sliceFromEndToWidthCalls');
+      result = ellipsis + sliceFromEndToWidth(text, availWidth);
+      break;
     case 'truncate-middle': {
       const half = Math.floor(availWidth / 2);
       const endLen = availWidth - half;
-      return sliceToWidth(text, half) + ellipsis + sliceFromEndToWidth(text, endLen);
+      if (perf) {
+        perf.count('sliceToWidthCalls');
+        perf.count('sliceFromEndToWidthCalls');
+      }
+      result = sliceToWidth(text, half) + ellipsis + sliceFromEndToWidth(text, endLen);
+      break;
     }
     default:
-      return text;
+      result = text;
   }
+  if (perf) perf.timeEnd('truncateText');
+  return result;
 }
 
 /**
@@ -41,7 +66,12 @@ function wrapSingleLine(
   text: string,
   width: number,
   hangingIndent?: number,
+  perf?: Perf,
 ): string[] {
+  if (perf) {
+    perf.count('wrapSingleLineCalls');
+    perf.timeStart('wrapSingleLine');
+  }
   const indent = hangingIndent ?? 0;
   const lines: string[] = [];
   let remaining = text;
@@ -50,6 +80,7 @@ function wrapSingleLine(
   while (remaining.length > 0) {
     const lineWidth = isFirstLine ? width : Math.max(width - indent, 1);
 
+    if (perf) perf.count('stringDisplayWidthCalls');
     if (stringDisplayWidth(remaining) <= lineWidth) {
       lines.push(remaining);
       break;
@@ -70,6 +101,7 @@ function wrapSingleLine(
       if (cp === 0xfe0f && prevCp !== null && charDisplayWidth(prevCp) === 1 && isTextPresentationEmoji(prevCp)) {
         w = 1;
         partOfCluster = true;
+        if (perf) perf.count('vs16Upgrades');
         if (cols + w > lineWidth) {
           // VS16 upgrade overflows, break before the base character
           overflowStrIdx = clusterStartStrIdx;
@@ -78,12 +110,15 @@ function wrapSingleLine(
       } else if (isSkinToneModifier(cp) && prevCp !== null && charDisplayWidth(prevCp) === 2) {
         w = 0;
         partOfCluster = true;
+        if (perf) perf.count('skinToneJoins');
       } else if (isRegionalIndicator(cp) && prevWasRI) {
         w = 0;
         partOfCluster = true;
+        if (perf) perf.count('regionalIndicatorJoins');
       } else if (prevWasZWJ && w === 2) {
         w = 0;
         partOfCluster = true;
+        if (perf) perf.count('zwjJoins');
       }
       if (cols + w > lineWidth) {
         if (partOfCluster) {
@@ -125,9 +160,11 @@ function wrapSingleLine(
 
     if (breakAt === -1) {
       // Hard break mid-word
+      if (perf) perf.count('hardBreaks');
       lines.push(remaining.slice(0, overflowStrIdx));
       remaining = remaining.slice(overflowStrIdx);
     } else {
+      if (perf) perf.count('spaceBreaks');
       lines.push(remaining.slice(0, breakAt));
       // Consume the space at break point
       remaining = remaining.slice(breakAt + 1);
@@ -136,6 +173,7 @@ function wrapSingleLine(
     isFirstLine = false;
   }
 
+  if (perf) perf.timeEnd('wrapSingleLine');
   return lines;
 }
 
@@ -150,8 +188,16 @@ export function wrapText(
   text: string,
   width: number,
   hangingIndent?: number,
+  perf?: Perf,
 ): string[] {
-  if (width <= 0 || !text) return [];
+  if (perf) {
+    perf.count('wrapTextCalls');
+    perf.timeStart('wrapText');
+  }
+  if (width <= 0 || !text) {
+    if (perf) perf.timeEnd('wrapText');
+    return [];
+  }
 
   // Split on embedded newlines. Each becomes a forced line break.
   const hardLines = text.split('\n');
@@ -165,9 +211,13 @@ export function wrapText(
     }
     // Each hard line starts fresh: first wrapped sub-line gets no indent,
     // continuation sub-lines get hangingIndent (same rule as the single-line case).
-    result.push(...wrapSingleLine(hardLine, width, hangingIndent));
+    result.push(...wrapSingleLine(hardLine, width, hangingIndent, perf));
   }
 
+  if (perf) {
+    perf.count('wrappedLinesProduced', result.length);
+    perf.timeEnd('wrapText');
+  }
   return result;
 }
 
@@ -179,12 +229,23 @@ export function wrapSegments(
   segments: Segment[],
   width: number,
   hangingIndent?: number,
+  perf?: Perf,
 ): WrappedLine[] {
+  if (perf) {
+    perf.count('wrapSegmentsCalls');
+    perf.timeStart('wrapSegments');
+  }
   const filtered = segments.filter(s => s.text.length > 0);
-  if (filtered.length === 0 || width <= 0) return [];
+  if (filtered.length === 0 || width <= 0) {
+    if (perf) perf.timeEnd('wrapSegments');
+    return [];
+  }
 
   const concat = filtered.map(s => s.text).join('');
-  if (!concat) return [];
+  if (!concat) {
+    if (perf) perf.timeEnd('wrapSegments');
+    return [];
+  }
 
   // Compute segment boundaries in the concatenated string
   const bounds: { start: number; end: number; idx: number }[] = [];
@@ -196,8 +257,11 @@ export function wrapSegments(
   }
 
   // Get plain wrapped lines for break-point calculation
-  const plainLines = wrapText(concat, width, hangingIndent);
-  if (plainLines.length === 0) return [];
+  const plainLines = wrapText(concat, width, hangingIndent, perf);
+  if (plainLines.length === 0) {
+    if (perf) perf.timeEnd('wrapSegments');
+    return [];
+  }
 
   // Map each plain line back to styled runs
   const result: WrappedLine[] = [];
@@ -235,6 +299,7 @@ export function wrapSegments(
     }
   }
 
+  if (perf) perf.timeEnd('wrapSegments');
   return result;
 }
 
@@ -250,12 +315,15 @@ function resolveMargins(node: TNode): { top: number; bottom: number; left: numbe
 }
 
 /** Compute the natural (content) width of a laid-out node. */
-function naturalWidth(node: TNode): number {
+function naturalWidth(node: TNode, perf?: Perf): number {
   if (node.type === 'text' && node.layout?.wrappedLines) {
     let max = 0;
     for (const line of node.layout.wrappedLines) {
       let lineLen = 0;
-      for (const run of line) lineLen += stringDisplayWidth(run.text);
+      for (const run of line) {
+        if (perf) perf.count('stringDisplayWidthCalls');
+        lineLen += stringDisplayWidth(run.text);
+      }
       max = Math.max(max, lineLen);
     }
     return max;
@@ -396,6 +464,7 @@ function applyAlignment(
   align: string | undefined,
   child: TNode,
   childWidth: number,
+  perf?: Perf,
 ): void {
   if (!align || align === 'stretch' || align === 'flex-start') return;
 
@@ -406,7 +475,7 @@ function applyAlignment(
   }
 
   // Box nodes: block-shift the entire subtree
-  const nw = naturalWidth(child);
+  const nw = naturalWidth(child, perf);
   const slack = childWidth - nw;
   if (slack <= 0) return;
 
@@ -443,12 +512,13 @@ export function layout(
   root: TNode,
   termWidth: number,
   _termHeight: number,
+  perf?: Perf,
 ): void {
   clearLayout(root);
 
   root.layout = { x: 0, y: 0, width: termWidth, height: 0 };
 
-  layoutChildrenList(root.children, root, 0, 0, termWidth);
+  layoutChildrenList(root.children, root, 0, 0, termWidth, perf);
 
   root.layout.height = computeChildrenHeightFromList(root.children, 0);
 }
@@ -466,13 +536,14 @@ function layoutChildren(
   startX: number,
   startY: number,
   availableWidth: number,
+  perf?: Perf,
 ): void {
   const flexDirection = node.props.flexDirection ?? 'column';
 
   if (flexDirection === 'row') {
-    layoutRow(node, startX, startY, availableWidth);
+    layoutRow(node, startX, startY, availableWidth, perf);
   } else {
-    layoutColumn(node, startX, startY, availableWidth);
+    layoutColumn(node, startX, startY, availableWidth, perf);
   }
 }
 
@@ -483,6 +554,7 @@ function layoutChildrenList(
   startX: number,
   startY: number,
   availableWidth: number,
+  perf?: Perf,
 ): void {
   const gap = parent.props.gap ?? 0;
   const align = parent.props.alignItems as string | undefined;
@@ -495,8 +567,8 @@ function layoutChildrenList(
 
     const childX = startX + margin.left;
     const childWidth = Math.max(availableWidth - margin.left - margin.right, 0);
-    layoutNode(child, childX, y, childWidth);
-    applyAlignment(align, child, childWidth);
+    layoutNode(child, childX, y, childWidth, perf);
+    applyAlignment(align, child, childWidth, perf);
 
     y += child.layout!.height + margin.bottom;
     if (i < children.length - 1) {
@@ -533,7 +605,12 @@ function layoutColumn(
   startX: number,
   startY: number,
   availableWidth: number,
+  perf?: Perf,
 ): void {
+  if (perf) {
+    perf.count('layoutColumnCalls');
+    perf.timeStart('layoutColumn');
+  }
   const gap = node.props.gap ?? 0;
   const align = node.props.alignItems as string | undefined;
   let y = startY;
@@ -545,8 +622,8 @@ function layoutColumn(
 
     const childX = startX + margin.left;
     const childWidth = Math.max(availableWidth - margin.left - margin.right, 0);
-    layoutNode(child, childX, y, childWidth);
-    applyAlignment(align, child, childWidth);
+    layoutNode(child, childX, y, childWidth, perf);
+    applyAlignment(align, child, childWidth, perf);
 
     y += child.layout!.height + margin.bottom;
     if (i < node.children.length - 1) {
@@ -562,6 +639,7 @@ function layoutColumn(
     const childrenHeight = computeChildrenHeight(node, startY);
     applyJustifyContent(node, startY, childrenHeight, node.props.height - paddingTop - paddingBottom);
   }
+  if (perf) perf.timeEnd('layoutColumn');
 }
 
 function layoutRow(
@@ -569,7 +647,12 @@ function layoutRow(
   startX: number,
   startY: number,
   availableWidth: number,
+  perf?: Perf,
 ): void {
+  if (perf) {
+    perf.count('layoutRowCalls');
+    perf.timeStart('layoutRow');
+  }
   const children = node.children;
 
   // Calculate fixed width consumption (including horizontal margins) and count fill children
@@ -618,7 +701,7 @@ function layoutRow(
     }
 
     childWidth = Math.max(childWidth, 0);
-    layoutNode(child, x, startY, childWidth);
+    layoutNode(child, x, startY, childWidth, perf);
 
     x += childWidth + margin.right;
     maxHeight = Math.max(maxHeight, child.layout!.height);
@@ -630,6 +713,7 @@ function layoutRow(
   // justifyContent along the x-axis for rows
   const usedWidth = x - startX;
   applyJustifyContentRow(node, startX, usedWidth, availableWidth);
+  if (perf) perf.timeEnd('layoutRow');
 }
 
 function layoutNode(
@@ -637,6 +721,7 @@ function layoutNode(
   x: number,
   y: number,
   availableWidth: number,
+  perf?: Perf,
 ): void {
   if (node.props.display === 'none') {
     node.layout = { x: 0, y: 0, width: 0, height: 0 };
@@ -649,7 +734,7 @@ function layoutNode(
   }
 
   if (node.type === 'text') {
-    layoutTextNode(node, x, y, availableWidth);
+    layoutTextNode(node, x, y, availableWidth, perf);
     return;
   }
 
@@ -667,7 +752,7 @@ function layoutNode(
 
   node.layout = { x, y, width: nodeWidth, height: 0 };
 
-  layoutChildren(node, contentX, contentY, contentWidth);
+  layoutChildren(node, contentX, contentY, contentWidth, perf);
 
   // Compute height from children
   node.layout.height = computeChildrenHeight(node, contentY) + paddingTop + paddingBottom;
@@ -683,9 +768,15 @@ function layoutTextNode(
   x: number,
   y: number,
   availableWidth: number,
+  perf?: Perf,
 ): void {
+  if (perf) {
+    perf.count('layoutTextNodes');
+    perf.timeStart('layoutTextNode');
+  }
   if (node.props.display === 'none') {
     node.layout = { x: 0, y: 0, width: 0, height: 0 };
+    if (perf) perf.timeEnd('layoutTextNode');
     return;
   }
 
@@ -693,7 +784,8 @@ function layoutTextNode(
   const segments = node.props.segments as Segment[] | undefined;
 
   if (segments) {
-    let wrappedLines = wrapSegments(segments, availableWidth, hangingIndent);
+    if (perf) perf.count('layoutTextNodesSegmented');
+    let wrappedLines = wrapSegments(segments, availableWidth, hangingIndent, perf);
     const wrapMode = node.props.wrap ?? 'wrap';
     if (wrapMode !== 'wrap' && wrappedLines.length > 1) {
       // Truncation collapses segments into plain text, losing per-segment styles.
@@ -701,7 +793,7 @@ function layoutTextNode(
       const fullText = wrappedLines.map(line =>
         line.map(run => run.text).join('')
       ).join(' ');
-      const truncated = truncateText(fullText, availableWidth, wrapMode);
+      const truncated = truncateText(fullText, availableWidth, wrapMode, perf);
       wrappedLines = [[{ text: truncated }]];
     }
     node.layout = {
@@ -712,6 +804,7 @@ function layoutTextNode(
       wrappedLines,
       hangingIndent: hangingIndent ?? undefined,
     };
+    if (perf) perf.timeEnd('layoutTextNode');
     return;
   }
 
@@ -726,17 +819,18 @@ function layoutTextNode(
       wrappedLines: [],
       hangingIndent: hangingIndent ?? undefined,
     };
+    if (perf) perf.timeEnd('layoutTextNode');
     return;
   }
 
-  const lines = wrapText(content, availableWidth, hangingIndent);
+  const lines = wrapText(content, availableWidth, hangingIndent, perf);
   let wrappedLines: WrappedLine[] = lines.map(line => [{ text: line }]);
   const wrapMode = node.props.wrap ?? 'wrap';
   if (wrapMode !== 'wrap' && wrappedLines.length > 1) {
     const fullText = wrappedLines.map(line =>
       line.map(run => run.text).join('')
     ).join(' ');
-    const truncated = truncateText(fullText, availableWidth, wrapMode);
+    const truncated = truncateText(fullText, availableWidth, wrapMode, perf);
     wrappedLines = [[{ text: truncated }]];
   }
   node.layout = {
@@ -747,6 +841,7 @@ function layoutTextNode(
     wrappedLines,
     hangingIndent: hangingIndent ?? undefined,
   };
+  if (perf) perf.timeEnd('layoutTextNode');
 }
 
 function computeChildrenHeight(node: TNode, startY: number): number {

@@ -2,6 +2,7 @@
  * Cell grid primitives. A CellGrid is the shared data structure between the
  * rasterizer (writes cells) and the diff engine (reads cells to produce ANSI).
  */
+import type { Perf } from './perf.js';
 
 /**
  * Color mode matches xterm's internal representation:
@@ -60,7 +61,13 @@ function emptyCell(): Cell {
   };
 }
 
-export function createGrid(width: number, height: number): CellGrid {
+export function createGrid(width: number, height: number, perf?: Perf): CellGrid {
+  if (perf) {
+    perf.timeStart('createGrid');
+    perf.count('createGridCalls');
+    perf.count('createGridRows', height);
+    perf.count('createGridCells', width * height);
+  }
   const cells: Cell[][] = [];
   for (let r = 0; r < height; r++) {
     const row: Cell[] = [];
@@ -69,6 +76,7 @@ export function createGrid(width: number, height: number): CellGrid {
     }
     cells.push(row);
   }
+  if (perf) perf.timeEnd('createGrid');
   return { cells, cursorRow: 0, cursorCol: 0, width, height };
 }
 

@@ -20,7 +20,8 @@
     "build": "rm -rf dist && tsc",
     "test": "bun test",
     "prepublishOnly": "bun run build",
-    "dev:pack": "rm -f cellstate-*.tgz && npx tsc && npm pack"
+    "dev:pack": "rm -f cellstate-*.tgz && npx tsc && npm pack",
+    "profile": "npx tsx scripts/profile.tsx"
   },
   "peerDependencies": {
     "react": "^19.0.0"

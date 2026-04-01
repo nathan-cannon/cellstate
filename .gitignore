@@ -5,3 +5,4 @@ dist/
 .DS_Store
 data/width-test-results.json
 frame-debug.txt
+.perf/

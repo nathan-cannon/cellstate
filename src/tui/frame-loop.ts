@@ -11,6 +11,14 @@ import { diff, fullRedraw, lastContentRow, serializeRowRange, serializeRowsReflo
 import { mountRoot } from './reconciler.js';
 import { writeFileSync } from 'node:fs';
 import { detectCapabilities, type TerminalCapabilities } from './capabilities.js';
+import { createPerf, type Perf, type PerfSnapshot } from '../perf.js';
+
+export interface FrameLoopOptions {
+  /** Override detected terminal capabilities. */
+  capabilities?: Partial<TerminalCapabilities>;
+  /** Enable in-memory performance instrumentation (default: false). */
+  perf?: boolean;
+}
 
 export interface FrameLoop {
   start: (element: React.ReactElement) => void;
@@ -19,6 +27,10 @@ export interface FrameLoop {
   getGrid: () => CellGrid | null;
   getScrollbackLines: () => number;
   dumpFrameLog: (path: string) => void;
+  /** Return a perf snapshot, or null when instrumentation is disabled. */
+  perfSnapshot: () => PerfSnapshot | null;
+  /** Reset perf counters/timings. No-op when disabled. */
+  perfReset: () => void;
 }
 
 // Terminal control sequences (non-capability-dependent).
@@ -29,10 +41,23 @@ const CLEAR_SCREEN_SCROLLBACK_HOME = '\x1b[2J\x1b[3J\x1b[H'; // Clear viewport +
 
 export function createFrameLoop(
   stdout: NodeJS.WriteStream,
-  capabilities?: Partial<TerminalCapabilities>,
+  options?: FrameLoopOptions | Partial<TerminalCapabilities>,
 ): FrameLoop {
+  // Accept either the new FrameLoopOptions bag or the legacy capabilities
+  // object for backward compatibility.
+  const isOptsObject = (o: unknown): o is FrameLoopOptions =>
+    typeof o === 'object' && o !== null && ('capabilities' in o || 'perf' in o);
+  const opts: FrameLoopOptions =
+    isOptsObject(options) ? options : { capabilities: options };
+
   // Merge caller-provided overrides with detected capabilities.
-  const caps = { ...detectCapabilities(), ...capabilities };
+  const caps = { ...detectCapabilities(), ...opts.capabilities };
+
+  const perfEnabled = opts.perf ?? (process.env.CELLSTATE_PERF === '1');
+  const perf: Perf = createPerf(perfEnabled);
+  // When disabled, pass undefined so diff/extractViewport/createGrid skip
+  // all `if (perf)` guards without even a no-op function call.
+  const perfOrUndef = perf.enabled ? perf : undefined;
 
   // DEC 2026 wraps frame output so supporting terminals paint atomically.
   // Terminals that don't recognize mode 2026 silently ignore the sequences,
@@ -51,13 +76,17 @@ export function createFrameLoop(
   let scrollbackRows = 0;
 
   function processFrame(root: TNode): void {
+    perf.count('frames');
     const cols = stdout.columns ?? 80;
     const rows = stdout.rows ?? 24;
 
-    layout(root, cols, rows);
+    perf.timeStart('layout');
+    layout(root, cols, rows, perfOrUndef);
+    perf.timeEnd('layout');
 
     if (isFirstFrame) {
       isFirstFrame = false;
+      perf.count('framesFullRedraw');
       doFullRedraw(root, cols, rows);
       return;
     }
@@ -65,23 +94,28 @@ export function createFrameLoop(
     // Rasterize full content into back buffer once.
     // actualHeight from the rasterized grid is the source of truth.
     const ch = contentHeight(root);
-    const fullGrid = rasterize(root, cols, Math.max(ch + 10, rows), 0);
+    perf.timeStart('rasterize');
+    const fullGrid = rasterize(root, cols, Math.max(ch + 10, rows), 0, perfOrUndef);
+    perf.timeEnd('rasterize');
     const actualHeight = lastContentRow(fullGrid) + 1;
     const desiredScrollback = Math.max(0, actualHeight - rows);
 
     if (desiredScrollback < scrollbackRows) {
       // Scrollback contains rows that no longer exist; must clear and rebuild
+      perf.count('framesFullRedraw');
       doFullRedraw(root, cols, rows);
       return;
     }
 
     if (desiredScrollback > scrollbackRows) {
       // Content grew past viewport, growth frame
+      perf.count('framesGrowth');
       doGrowthFrame(cols, rows, fullGrid, actualHeight, desiredScrollback);
       return;
     }
 
     // No scrollback change, update frame
+    perf.count('framesUpdate');
     doUpdateFrame(cols, rows, fullGrid, actualHeight, desiredScrollback);
   }
 
@@ -99,31 +133,40 @@ export function createFrameLoop(
     if (ch <= 0) {
       // Nothing to draw, just clear
       const output = DEC_2026_ON + CLEAR_SCREEN_SCROLLBACK_HOME + CURSOR_HIDE + DEC_2026_OFF;
+      perf.timeStart('write');
       const ok = stdout.write(output);
-      if (!ok) isFlushing = true;
+      perf.timeEnd('write');
+      perf.count('bytesWritten', output.length);
+      perf.count('bytesFullRedraw', output.length);
+      if (!ok) { isFlushing = true; perf.count('drainWaits'); }
       return;
     }
 
     // Rasterize full content; derive actual height from rasterized grid
-    const fullGrid = rasterize(root, cols, Math.max(ch + 10, rows), 0);
+    perf.timeStart('rasterize');
+    const fullGrid = rasterize(root, cols, Math.max(ch + 10, rows), 0, perfOrUndef);
+    perf.timeEnd('rasterize');
     const actualHeight = lastContentRow(fullGrid) + 1;
     const desiredScrollback = Math.max(0, actualHeight - rows);
 
     const { scrollSeq, redrawSeq } = growthInner(fullGrid, actualHeight, desiredScrollback, cols, rows);
-
-    if (process.env.DEBUG) {
-      process.stderr.write(`[FULL] scroll=${scrollSeq.length} redraw=${redrawSeq.length} bytes (scrollback=${scrollbackRows}, contentHeight=${actualHeight}, viewport=${rows})\n`);
-    }
 
     // Two separate DEC 2026 blocks: the terminal needs to finish processing
     // scroll state changes (clear, pre-paint, push rows into scrollback) before
     // the viewport redraw begins. Batching them risks the viewport redraw
     // landing at the wrong scroll offset on terminals that flush scroll state
     // lazily within a synchronized block.
-    const ok1 = stdout.write(DEC_2026_ON + CLEAR_SCREEN_SCROLLBACK_HOME + CURSOR_HIDE + scrollSeq + DEC_2026_OFF);
-    if (!ok1) isFlushing = true;
-    const ok2 = stdout.write(DEC_2026_ON + redrawSeq + DEC_2026_OFF);
-    if (!ok2) isFlushing = true;
+    const block1 = DEC_2026_ON + CLEAR_SCREEN_SCROLLBACK_HOME + CURSOR_HIDE + scrollSeq + DEC_2026_OFF;
+    const block2 = DEC_2026_ON + redrawSeq + DEC_2026_OFF;
+    const totalBytes = block1.length + block2.length;
+    perf.count('bytesWritten', totalBytes);
+    perf.count('bytesFullRedraw', totalBytes);
+    perf.timeStart('write');
+    const ok1 = stdout.write(block1);
+    if (!ok1) { isFlushing = true; perf.count('drainWaits'); }
+    const ok2 = stdout.write(block2);
+    perf.timeEnd('write');
+    if (!ok2) { isFlushing = true; perf.count('drainWaits'); }
   }
 
   function doGrowthFrame(
@@ -135,13 +178,13 @@ export function createFrameLoop(
   ): void {
     const { scrollSeq, redrawSeq } = growthInner(fullGrid, actualHeight, desiredScrollback, cols, rows);
 
-    if (process.env.DEBUG) {
-      process.stderr.write(`[GROW] scroll=${scrollSeq.length} redraw=${redrawSeq.length} bytes (scrollback=${scrollbackRows}, contentHeight=${actualHeight}, viewport=${rows})\n`);
-    }
-
     const output = DEC_2026_ON + scrollSeq + redrawSeq + DEC_2026_OFF;
+    perf.count('bytesWritten', output.length);
+    perf.count('bytesGrowth', output.length);
+    perf.timeStart('write');
     const ok = stdout.write(output);
-    if (!ok) isFlushing = true;
+    perf.timeEnd('write');
+    if (!ok) { isFlushing = true; perf.count('drainWaits'); }
   }
 
   interface GrowthResult {
@@ -174,6 +217,7 @@ export function createFrameLoop(
       let offset = scrollbackRows;
       let remaining = scrollNeeded;
 
+      perf.timeStart('serialize');
       while (remaining > 0) {
         const batch = Math.min(remaining, rows);
 
@@ -188,12 +232,15 @@ export function createFrameLoop(
         offset += batch;
         remaining -= batch;
       }
+      perf.timeEnd('serialize');
     }
 
     scrollbackRows = desiredScrollback;
 
-    const viewportGrid = extractViewport(fullGrid, desiredScrollback, rows);
+    const viewportGrid = extractViewport(fullGrid, desiredScrollback, rows, perfOrUndef);
+    perf.timeStart('serialize');
     const redraw = fullRedraw(viewportGrid, 0);
+    perf.timeEnd('serialize');
     const redrawSeq = '\x1b[H' + redraw.output;
     prevGrid = viewportGrid;
     lastGrid = viewportGrid;
@@ -213,39 +260,36 @@ export function createFrameLoop(
   ): void {
     scrollbackRows = desiredScrollback;
 
-    const viewportGrid = extractViewport(fullGrid, scrollbackRows, rows);
+    const viewportGrid = extractViewport(fullGrid, scrollbackRows, rows, perfOrUndef);
 
     let result: { output: string; endRow: number; endCol: number };
     if (prevGrid === null) {
       // prevGrid is null after resize, fall back to full viewport redraw
+      perf.count('diffFullRedrawFallbacks');
+      perf.timeStart('serialize');
       result = fullRedraw(viewportGrid, 0);
+      perf.timeEnd('serialize');
     } else {
-      result = diff(prevGrid, viewportGrid, 0, 0);
+      // diff() self-times and self-counts when perfOrUndef is provided
+      result = diff(prevGrid, viewportGrid, 0, 0, perfOrUndef);
     }
 
     prevGrid = viewportGrid;
     lastGrid = viewportGrid;
 
-    if (result.output.length === 0) return;
+    if (result.output.length === 0) {
+      perf.count('framesSkipped');
+      return;
+    }
 
     const output = DEC_2026_ON + '\x1b[H' + result.output + DEC_2026_OFF;
+    perf.count('bytesWritten', output.length);
+    perf.count('bytesUpdate', output.length);
 
-    if (process.env.DEBUG) {
-      process.stderr.write(`[DIFF] ${result.output.length} bytes (scrollback=${scrollbackRows}, contentHeight=${actualHeight}, viewport=${rows})\n`);
-    }
-
-    if (process.env.DEBUG) {
-      const fs = require('fs');
-      fs.appendFileSync('frame-debug.txt',
-        `--- FRAME (DIFF) ---\n` +
-        `contentHeight=${actualHeight} scrollbackRows=${scrollbackRows}\n` +
-        `output bytes=${output.length}\n` +
-        JSON.stringify(output) + '\n\n'
-      );
-    }
-
+    perf.timeStart('write');
     const ok = stdout.write(output);
-    if (!ok) isFlushing = true;
+    perf.timeEnd('write');
+    if (!ok) { isFlushing = true; perf.count('drainWaits'); }
   }
 
   let frameTimer: ReturnType<typeof setTimeout> | null = null;
@@ -282,6 +326,8 @@ export function createFrameLoop(
 
   function onDrain(): void {
     isFlushing = false;
+    // drainWaits is counted when backpressure is detected (isFlushing set);
+    // this handler fires when the drain completes.
     if (pendingRoot !== null && frameTimer === null) {
       frameTimer = setTimeout(flushFrame, 4);
     }
@@ -305,7 +351,7 @@ export function createFrameLoop(
       const cols = stdout.columns ?? 80;
       const rows = stdout.rows ?? 24;
 
-      layout(lastRoot, cols, rows);
+      layout(lastRoot, cols, rows, perfOrUndef);
 
       if (process.env.DEBUG) {
         process.stderr.write(
@@ -354,9 +400,9 @@ export function createFrameLoop(
 
       if (lastRoot !== null) {
         try {
-          layout(lastRoot, cols, rows);
+          layout(lastRoot, cols, rows, perfOrUndef);
           const ch = contentHeight(lastRoot);
-          const grid = rasterize(lastRoot, cols, ch, 0);
+          const grid = rasterize(lastRoot, cols, ch, 0, perfOrUndef);
           const result = serializeRowsReflow(grid);
           writeFileSync(
             1,
@@ -402,6 +448,14 @@ export function createFrameLoop(
         lastGridSize: lastGrid ? { width: lastGrid.width, height: lastGrid.height } : null,
       };
       writeFileSync(path, JSON.stringify(snapshot, null, 2));
+    },
+
+    perfSnapshot() {
+      return perf.snapshot();
+    },
+
+    perfReset() {
+      perf.reset();
     },
   };
 }

@@ -14,6 +14,7 @@ import {
   type CellGrid,
   type Color,
 } from "./cell.js";
+import type { Perf } from './perf.js';
 
 /** Find the last row that contains non-default content (non-space char, styled, or has attrs). */
 export function lastContentRow(grid: CellGrid): number {
@@ -423,11 +424,17 @@ export function serializeRowRange(grid: CellGrid, startRow: number, endRow: numb
  * scrollOffset+viewportRows-1 from fullGrid. Rows beyond fullGrid.height
  * are filled with blank cells.
  */
-export function extractViewport(fullGrid: CellGrid, scrollOffset: number, viewportRows: number): CellGrid {
-  const result = createGrid(fullGrid.width, viewportRows);
+export function extractViewport(fullGrid: CellGrid, scrollOffset: number, viewportRows: number, perf?: Perf): CellGrid {
+  if (perf) {
+    perf.timeStart('extractViewport');
+    perf.count('extractViewportCalls');
+  }
+  const result = createGrid(fullGrid.width, viewportRows, perf);
+  let rowsCopied = 0;
   for (let r = 0; r < viewportRows; r++) {
     const srcRow = scrollOffset + r;
     if (srcRow < fullGrid.height) {
+      rowsCopied++;
       for (let c = 0; c < fullGrid.width; c++) {
         const src = fullGrid.cells[srcRow][c];
         result.cells[r][c] = {
@@ -440,6 +447,12 @@ export function extractViewport(fullGrid: CellGrid, scrollOffset: number, viewpo
       }
     }
     // else: already blank from createGrid
+  }
+  if (perf) {
+    perf.count('extractViewportRowsCopied', rowsCopied);
+    perf.count('extractViewportCellsCopied', rowsCopied * fullGrid.width);
+    perf.count('extractViewportBlankRows', viewportRows - rowsCopied);
+    perf.timeEnd('extractViewport');
   }
   return result;
 }
@@ -514,8 +527,18 @@ export function diff(
   next: CellGrid,
   startRow?: number,
   startCol?: number,
+  perf?: Perf,
 ): DiffResult {
+  if (perf) {
+    perf.count('diffCalls');
+    perf.timeStart('diff');
+  }
+
   if (prev.width !== next.width || prev.height !== next.height) {
+    if (perf) {
+      perf.count('diffFullRedrawFallbacks');
+      perf.timeEnd('diff');
+    }
     return fullRedraw(next);
   }
 
@@ -525,6 +548,9 @@ export function diff(
   let skippedRows = 0;
   let erasedRows = 0;
   let erasedTrailing = 0;
+  let changedCells = 0;
+  let cursorMoves = 0;
+  let styleDeltas = 0;
 
   // Cursor starts where the caller says it is
   let curRow = startRow ?? prev.cursorRow;
@@ -543,6 +569,7 @@ export function diff(
     if (isBlankRow(next, r, width)) {
       if (curRow !== r || curCol !== 0) {
         out += moveCursor(curRow, curCol, r, 0);
+        cursorMoves++;
         curRow = r;
         curCol = 0;
       }
@@ -591,6 +618,7 @@ export function diff(
       ) {
         if (curRow !== r || curCol !== c) {
           out += moveCursor(curRow, curCol, r, c);
+          cursorMoves++;
           curRow = r;
           curCol = c;
         }
@@ -610,6 +638,7 @@ export function diff(
       // Position cursor using relative movement
       if (curRow !== r || curCol !== c) {
         out += moveCursor(curRow, curCol, r, c);
+        cursorMoves++;
         curRow = r;
         curCol = c;
       }
@@ -617,6 +646,7 @@ export function diff(
       // Set style if needed
       if (!styleKnown) {
         // First cell: unknown terminal state, must do full emit
+        styleDeltas++;
         out += `${ESC}0m`;
         if (
           nCell.attrs !== 0 ||
@@ -630,6 +660,7 @@ export function diff(
         curAttrs = nCell.attrs;
         styleKnown = true;
       } else if (!styleMatches(nCell.fg, nCell.bg, nCell.attrs, curFg, curBg, curAttrs)) {
+        styleDeltas++;
         out += styleDelta(curFg, curBg, curAttrs, nCell.fg, nCell.bg, nCell.attrs);
         curFg = nCell.fg;
         curBg = nCell.bg;
@@ -637,6 +668,7 @@ export function diff(
       }
 
       // Write the character
+      changedCells++;
       out += nCell.char;
       curCol += nCell.width;
 
@@ -657,8 +689,15 @@ export function diff(
     out += `${ESC}0m`;
   }
 
-  if (process.env.DEBUG && (skippedRows > 0 || erasedRows > 0 || erasedTrailing > 0)) {
-    process.stderr.write(`[DAMAGE] skipped=${skippedRows} erased=${erasedRows} trailingErase=${erasedTrailing} of ${height} rows\n`);
+  if (perf) {
+    perf.count('diffRowsCompared', height);
+    perf.count('diffRowsSkipped', skippedRows);
+    perf.count('diffRowsErased', erasedRows);
+    perf.count('diffTrailingEraseHits', erasedTrailing);
+    perf.count('diffChangedCells', changedCells);
+    perf.count('diffCursorMoves', cursorMoves);
+    perf.count('diffStyleDeltas', styleDeltas);
+    perf.timeEnd('diff');
   }
 
   return { output: out, endRow: curRow, endCol: curCol };
