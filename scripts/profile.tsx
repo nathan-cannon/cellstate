@@ -20,7 +20,7 @@
  */
 
 import React from 'react';
-import { createFrameLoop, type FrameLoop } from '../src/tui/frame-loop.js';
+import { createFrameLoop, type FrameLoop } from '../src/core/frame-loop.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 

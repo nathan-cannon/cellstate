@@ -1,5 +1,5 @@
 /** Measures createGrid vs clearGrid (reuse) at various sizes. */
-import { createGrid, ColorMode, type CellGrid } from '../../src/cell.js';
+import { createGrid, ColorMode, type CellGrid } from '../../src/core/cell.js';
 import { measure, computeStats, fmtMs, printTable } from '../harness.js';
 
 const COLS = 120;

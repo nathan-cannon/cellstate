@@ -1,7 +1,7 @@
 /** Compares full-height rasterize vs viewport-only to quantify clipping savings. */
-import { layout, contentHeight } from '../../src/tui/layout.js';
-import { rasterize } from '../../src/tui/rasterizer.js';
-import { lastContentRow } from '../../src/diff.js';
+import { layout, contentHeight } from '../../src/core/layout.js';
+import { rasterize } from '../../src/core/rasterizer.js';
+import { lastContentRow } from '../../src/core/diff.js';
 import { buildChatTree } from '../content.js';
 import { measure, computeStats, fmtMs, printTable } from '../harness.js';
 

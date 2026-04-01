@@ -4,13 +4,13 @@
  */
 import React, { useState, useLayoutEffect } from 'react';
 import { performance } from 'node:perf_hooks';
-import { Box, Text } from '../../src/tui/components.js';
-import { mountRoot } from '../../src/tui/reconciler.js';
-import { layout, contentHeight } from '../../src/tui/layout.js';
-import { rasterize } from '../../src/tui/rasterizer.js';
-import { diff, extractViewport, lastContentRow } from '../../src/diff.js';
-import type { TNode } from '../../src/tui/nodes.js';
-import type { CellGrid } from '../../src/cell.js';
+import { Box, Text } from '../../src/components/elements.js';
+import { mountRoot } from '../../src/core/reconciler.js';
+import { layout, contentHeight } from '../../src/core/layout.js';
+import { rasterize } from '../../src/core/rasterizer.js';
+import { diff, extractViewport, lastContentRow } from '../../src/core/diff.js';
+import type { TNode } from '../../src/core/nodes.js';
+import type { CellGrid } from '../../src/core/cell.js';
 import {
   getMessageBody,
   getRole,

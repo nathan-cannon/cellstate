@@ -1,4 +1,4 @@
-import { stringDisplayWidth } from '../../src/width.js';
+import { stringDisplayWidth } from '../../src/core/width.js';
 import { describe, test, expect } from 'bun:test';
 import { readdirSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';

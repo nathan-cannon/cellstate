@@ -3,9 +3,9 @@
  * content shared across all scenarios. Tree builders bypass React to
  * isolate pipeline stages from reconciliation overhead.
  */
-import { createNode, appendChild, type TNode, type Segment } from '../src/tui/nodes.js';
-import { highlightCode } from '../src/tui/highlighter.js';
-import { flattenInline } from '../src/tui/markdown.js';
+import { createNode, appendChild, type TNode, type Segment } from '../src/core/nodes.js';
+import { highlightCode } from '../src/components/highlighter.js';
+import { flattenInline } from '../src/components/markdown.js';
 import { unified } from 'unified';
 import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';

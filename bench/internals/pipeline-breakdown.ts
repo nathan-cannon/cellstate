@@ -1,9 +1,9 @@
 /** Measures each pipeline stage in isolation at increasing message counts. */
 import { performance } from 'node:perf_hooks';
-import { createGrid, ColorMode, type CellGrid } from '../../src/cell.js';
-import { layout, contentHeight, clearLayout } from '../../src/tui/layout.js';
-import { rasterize } from '../../src/tui/rasterizer.js';
-import { diff, extractViewport, lastContentRow } from '../../src/diff.js';
+import { createGrid, ColorMode, type CellGrid } from '../../src/core/cell.js';
+import { layout, contentHeight, clearLayout } from '../../src/core/layout.js';
+import { rasterize } from '../../src/core/rasterizer.js';
+import { diff, extractViewport, lastContentRow } from '../../src/core/diff.js';
 import { buildChatTree, inputLineText } from '../content.js';
 import { measure, computeStats, fmtMs, printTable } from '../harness.js';
 

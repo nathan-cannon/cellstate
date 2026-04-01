@@ -10,7 +10,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { charDisplayWidth, stringDisplayWidth } from '../src/width.js';
+import { charDisplayWidth, stringDisplayWidth } from '../src/core/width.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const dataPath = resolve(__dirname, '..', 'data', 'emoji-data.txt');

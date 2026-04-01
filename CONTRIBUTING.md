@@ -37,7 +37,7 @@ The test suite uses property-based testing against xterm.js as a ground truth or
 
 Run a specific test file:
 ```bash
-bun test test/__tests__/diff.test.ts
+bun test test/core/diff.test.ts
 ```
 
 ## Pull requests
@@ -50,15 +50,23 @@ bun test test/__tests__/diff.test.ts
 
 ```
 src/
-  cell.ts           Cell grid data structures
-  diff.ts           Cell-level diff engine and ANSI serialization
-  width.ts          Unicode display width tables
-  tui/
-    reconciler.ts   React reconciler (TNode tree)
-    layout.ts       Flexbox layout engine
-    rasterizer.ts   Paints TNodes into CellGrid
-    frame-loop.ts   Frame scheduling and scrollback management
-    render.ts       Terminal lifecycle (raw mode, cursor, cleanup)
+  core/
+    cell.ts           Cell grid data structures
+    diff.ts           Cell-level diff engine and ANSI serialization
+    width.ts          Unicode display width tables
+    reconciler.ts     React reconciler (TNode tree)
+    layout.ts         Flexbox layout engine
+    rasterizer.ts     Paints TNodes into CellGrid
+    frame-loop.ts     Frame scheduling and scrollback management
+    render.ts         Terminal lifecycle (raw mode, cursor, cleanup)
+  components/
+    elements.ts       JSX component exports (Box, Text, Divider)
+    markdown.tsx      Markdown-to-JSX converter
+    highlighter.ts    Syntax highlighting (Shiki)
+  hooks/
+    use-input.ts      Keyboard input hook
+    use-focus.ts      Focus management hook
+    app-context.ts    App lifecycle context
 ```
 
 The rendering pipeline: React reconciler > layout > rasterize > viewport extract > diff > ANSI output.

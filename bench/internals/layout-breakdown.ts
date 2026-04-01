@@ -1,5 +1,5 @@
 /** Profiles layout sub-operations: full layout, clearLayout, wrapText, wrapSegments. */
-import { layout, clearLayout, wrapText, wrapSegments } from '../../src/tui/layout.js';
+import { layout, clearLayout, wrapText, wrapSegments } from '../../src/core/layout.js';
 import { buildChatTree, buildMarkdownChatTree, collectAllText, collectMarkdownSegments } from '../content.js';
 import { measure, computeStats, fmtMs, printTable } from '../harness.js';
 

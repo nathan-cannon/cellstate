@@ -1,4 +1,4 @@
-import { charDisplayWidth, stringDisplayWidth } from '../../src/width.js';
+import { charDisplayWidth, stringDisplayWidth } from '../../src/core/width.js';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';

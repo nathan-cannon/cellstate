@@ -1,7 +1,7 @@
 /** Compares growth frame cost (scrollback push + redraw) vs normal update frame (diff only). */
-import { layout, contentHeight, clearLayout } from '../../src/tui/layout.js';
-import { rasterize } from '../../src/tui/rasterizer.js';
-import { diff, fullRedraw, extractViewport, lastContentRow, serializeRowRange } from '../../src/diff.js';
+import { layout, contentHeight, clearLayout } from '../../src/core/layout.js';
+import { rasterize } from '../../src/core/rasterizer.js';
+import { diff, fullRedraw, extractViewport, lastContentRow, serializeRowRange } from '../../src/core/diff.js';
 import { buildChatTree } from '../content.js';
 import { measure, computeStats, fmtMs, printTable } from '../harness.js';
 
