@@ -9,16 +9,22 @@
 </p>
 
 ## Overview
- 
+
 CellState renders into the main terminal buffer with no alternate screen. Content scrolls naturally, persists after exit, and works with native terminal features like search, text selection, copy/paste, and scrollback.
- 
-The tradeoff is that the renderer can't clear and redraw the screen on every frame. Once content scrolls into the terminal's scrollback buffer, it becomes unreachable. CellState handles this by tracking which cells are in the viewport and which have moved into scrollback, diffing only what's visible, and falling back to a full redraw only when necessary.
- 
-Rendering cost scales with what changed, not total content size. When a single component updates in a 250-message conversation, the paint system blits unchanged subtrees from the previous frame and only repaints the dirty region. This brings paint time from 3.4ms (full repaint) down to 0.47ms. The diff engine then compares only damaged cells within the viewport, so emission cost stays flat regardless of conversation length. During streaming with markdown and syntax-highlighted code blocks, median frame time at 100 messages is 4ms, well under a 16ms frame budget. Frame coalescing merges rapid React commits into a single rendered frame, and backpressure handling defers frames when stdout can't keep up, preventing unbounded memory growth during fast updates.
- 
-CellState detects terminal capabilities at startup and adapts its output accordingly. Synchronized output (DEC 2026) is enabled on terminals that support it, including iTerm2, Ghostty, kitty, WezTerm, Alacritty, Windows Terminal, and VTE-based terminals like GNOME Terminal. OSC 8 hyperlinks are emitted when the terminal supports them, with correct grouping across wrapped lines. On Windows, the clear sequence adapts between modern Windows Terminal and legacy conhost. Piped output (non-TTY) skips all cursor movement and emits plain styled text. The process recovers cleanly from Ctrl+Z suspension.
- 
-Unicode handling covers CJK characters, emoji, grapheme clusters, ZWJ sequences, skin tone modifiers, flag sequences, and Variation Selector 16 upgrades. Display width tables are generated from Unicode 17.0 data. The layout engine, paint system, and diff engine all operate on terminal column widths, not string lengths.
+
+The tradeoff is that the renderer can't clear and redraw the screen on every frame. Once content scrolls into the terminal's scrollback buffer, it's unreachable. CellState tracks which cells are still in the viewport versus scrollback, diffs only what's visible, and falls back to a full redraw only when necessary.
+
+Rendering cost scales with what changed, not total content size. Paint and diff stay fast regardless of conversation length. Frame coalescing merges rapid React commits into a single frame, and backpressure handling defers frames when stdout can't keep up.
+
+CellState detects terminal capabilities at startup and adapts its output:
+
+- Synchronized output on terminals that support it
+- OSC 8 hyperlinks with correct grouping across wrapped lines
+- Platform-specific clear sequences (Windows Terminal vs. legacy conhost)
+- Plain styled text for piped (non-TTY) output
+- Clean recovery from Ctrl+Z suspension
+
+Unicode handling covers CJK characters, emoji, grapheme clusters, ZWJ sequences, and more, using display width tables from Unicode 17.0 data. Layout, paint, and diff all operate on terminal column widths, not string lengths.
  
 
 ## Install
@@ -78,7 +84,7 @@ await app.waitUntilExit();
 
 
 ## Getting Started
-CellState uses Yoga to create Flexbox layouts in the terminal, allowing you to build user interfaces for your CLIs using familiar CSS-like properties. `<Box>` is your layout container (like `<div>` with `display: flex`), `<Text>` renders styled text. State changes via hooks trigger re-renders automatically.
+CellState uses [Yoga](https://github.com/facebook/yoga) to create Flexbox layouts in the terminal, allowing you to build user interfaces for your CLIs using familiar CSS-like properties. `<Box>` is your layout container (like `<div>` with `display: flex`), `<Text>` renders styled text. State changes via hooks trigger re-renders automatically.
 
 All visible text must be inside a `<Text>` component. You can use plain string children or structured segments for mixed styles. The built-in `<Markdown>` and `<StreamingMarkdown>` components parse markdown via remark, syntax-highlight code blocks via tree-sitter, and render through the `<RawAnsi>` fast path, bypassing React reconciliation and Yoga layout for the markdown content.
 
