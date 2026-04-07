@@ -26,9 +26,9 @@ afterEach(() => {
 describe('detectCapabilities', () => {
   // ── Defaults ───────────────────────────────────────────────────────────
 
-  it('clean environment: defaults to capable terminal', () => {
+  it('clean environment: synchronizedOutput defaults to false without allowlisted terminal', () => {
     const caps = detectCapabilities();
-    expect(caps.synchronizedOutput).toBe(true);
+    expect(caps.synchronizedOutput).toBe(false);
     expect(caps.truecolor).toBe(true);
     expect(caps.multiplexer).toBeNull();
     expect(caps.remoteSession).toBe(false);
@@ -51,12 +51,12 @@ describe('detectCapabilities', () => {
     expect(caps.synchronizedOutput).toBe(false);
   });
 
-  it('ZELLIJ set: multiplexer zellij, synchronizedOutput true', () => {
+  it('ZELLIJ set: multiplexer zellij, synchronizedOutput false', () => {
     process.env.ZELLIJ = '0';
     const caps = detectCapabilities();
     expect(caps.multiplexer).toBe('zellij');
-    // Zellij supports DEC 2026
-    expect(caps.synchronizedOutput).toBe(true);
+    // Zellij is not on the synchronizedOutput allowlist
+    expect(caps.synchronizedOutput).toBe(false);
   });
 
   // ── Remote session ─────────────────────────────────────────────────────
@@ -68,13 +68,12 @@ describe('detectCapabilities', () => {
     expect(caps.synchronizedOutput).toBe(false);
   });
 
-  it('SSH_CONNECTION set: remoteSession true, synchronizedOutput still true', () => {
+  it('SSH_CONNECTION set: remoteSession true, synchronizedOutput false without allowlisted terminal', () => {
     process.env.SSH_CONNECTION = '192.168.1.1 12345 192.168.1.2 22';
     const caps = detectCapabilities();
     expect(caps.remoteSession).toBe(true);
-    // SSH alone doesn't affect synchronized output — the remote terminal
-    // still processes DEC 2026 correctly
-    expect(caps.synchronizedOutput).toBe(true);
+    // No allowlisted TERM_PROGRAM set, so synchronizedOutput is false
+    expect(caps.synchronizedOutput).toBe(false);
   });
 
   it('SSH_CLIENT set: remoteSession true', () => {
