@@ -6,3 +6,4 @@ dist/
 data/width-test-results.json
 frame-debug.txt
 .perf/
+.claude/

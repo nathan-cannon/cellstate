@@ -1,16 +1,20 @@
 /**
  * Component mount benchmark: adding 10 messages in one update. Exercises
- * reconciler, layout, and diff. Compares against no-change pipeline cost.
+ * reconciler, layout, and emit. Compares against no-change pipeline cost.
  */
 import React, { useState, useLayoutEffect } from 'react';
 import { performance } from 'node:perf_hooks';
 import { Box, Text } from '../../src/components/elements.js';
-import { mountRoot } from '../../src/core/reconciler.js';
-import { layout, contentHeight } from '../../src/core/layout.js';
-import { rasterize } from '../../src/core/rasterizer.js';
-import { diff, extractViewport, lastContentRow } from '../../src/core/diff.js';
+import { mountRoot, setFlexNodeFactory } from '../../src/core/reconciler.js';
+import { createFlexNodeFactory } from '../../src/layout/yoga-flex.js';
+import { paintTree } from '../../src/core/paint.js';
+import { createCellBuffer, type CellBuffer } from '../../src/core/cell-buffer.js';
+import { diffBuffers } from '../../src/core/emit.js';
+import { viewportSlice, expandDamageForShrink } from '../../src/core/cell-buffer.js';
+import { CharTable } from '../../src/core/char-table.js';
+import { StyleTable } from '../../src/core/style-table.js';
+import { LinkTable } from '../../src/core/link-table.js';
 import type { TNode } from '../../src/core/nodes.js';
-import type { CellGrid } from '../../src/core/cell.js';
 import {
   getMessageBody,
   getRole,
@@ -62,15 +66,31 @@ function MountApp({ startCount }: { startCount: number }) {
   return <ChatUI messageCount={msgCount} counter={0} />;
 }
 
-function runPipeline(root: TNode, prevGrid: CellGrid): { viewportGrid: CellGrid; output: string } {
-  layout(root, COLS, ROWS);
-  const ch = contentHeight(root);
-  const fullGrid = rasterize(root, COLS, Math.max(ch + 10, ROWS), 0);
-  const actualHeight = lastContentRow(fullGrid) + 1;
-  const scrollback = Math.max(0, actualHeight - ROWS);
-  const viewportGrid = extractViewport(fullGrid, scrollback, ROWS);
-  const result = diff(prevGrid, viewportGrid, 0, 0);
-  return { viewportGrid, output: result.output };
+function doLayout(root: TNode): void {
+  root.flexNode!.setWidth(COLS);
+  root.flexNode!.calculateLayout(COLS);
+}
+
+function runPipeline(
+  root: TNode,
+  frontBuf: CellBuffer | null,
+  charTable: CharTable,
+  styleTable: StyleTable,
+  linkTable: LinkTable,
+): { backBuf: CellBuffer; output: string } {
+  doLayout(root);
+  const ch = root.flexNode!.getComputedHeight();
+  const bufHeight = Math.max(ch, ROWS);
+  const backBuf = createCellBuffer(COLS, bufHeight);
+  paintTree(root, backBuf, frontBuf, charTable, styleTable, linkTable, 0);
+  const emitFront = frontBuf ?? createCellBuffer(COLS, 1);
+  expandDamageForShrink(emitFront, backBuf);
+  const backStart = Math.max(0, backBuf.height - ROWS);
+  const frontStart = Math.max(0, emitFront.height - ROWS);
+  const backVp = viewportSlice(backBuf, backStart, ROWS);
+  const frontVp = viewportSlice(emitFront, frontStart, ROWS);
+  const patch = diffBuffers(frontVp, backVp, styleTable, charTable, linkTable, false);
+  return { backBuf, output: patch };
 }
 
 let latestRoot: TNode | null = null;
@@ -102,6 +122,11 @@ export async function runComponentMount(): Promise<void> {
     rootResolve = null;
     globalSetMsgCount = null;
 
+    const charTable = new CharTable();
+    const styleTable = new StyleTable();
+    const linkTable = new LinkTable();
+
+    setFlexNodeFactory(createFlexNodeFactory());
     mountRoot(<MountApp startCount={startCount} />, onFrame);
 
     let root = await waitForCommit();
@@ -116,39 +141,38 @@ export async function runComponentMount(): Promise<void> {
     }
 
     // Initial pipeline
-    layout(root, COLS, ROWS);
-    const ch0 = contentHeight(root);
-    const fg0 = rasterize(root, COLS, Math.max(ch0 + 10, ROWS), 0);
-    const ah0 = lastContentRow(fg0) + 1;
-    const sb0 = Math.max(0, ah0 - ROWS);
-    let prevGrid: CellGrid = extractViewport(fg0, sb0, ROWS);
+    doLayout(root);
+    const ch0 = root.flexNode!.getComputedHeight();
+    let frontBuf = createCellBuffer(COLS, Math.max(ch0, ROWS));
+    paintTree(root, frontBuf, null, charTable, styleTable, linkTable, 0);
 
     // Measure mount: add MOUNT_BATCH messages in one setState
     const mountLatencies: number[] = [];
     const mountBytes: number[] = [];
 
-    // Also measure single-cell update at the final size for comparison
+    // Also measure pipeline-only cost at the final size for comparison
     const updateLatencies: number[] = [];
 
-    // Warmup
+    // Warmup: repeatedly mount startCount → startCount + MOUNT_BATCH to warm
+    // caches and JIT, then settle back to startCount. This matches the real
+    // measurement pattern (always mounting from the same baseline).
     for (let i = 0; i < WARMUP; i++) {
+      // Mount
       latestRoot = null;
-      // Toggle between startCount and startCount+MOUNT_BATCH
-      const targetCount = i % 2 === 0 ? startCount + MOUNT_BATCH : startCount;
-      globalSetMsgCount!(() => targetCount);
+      globalSetMsgCount!(() => startCount + MOUNT_BATCH);
       await new Promise<void>((r) => queueMicrotask(r));
       root = await waitForCommit();
-      const { viewportGrid } = runPipeline(root, prevGrid);
-      prevGrid = viewportGrid;
-    }
+      const { backBuf: mountBuf } = runPipeline(root, frontBuf, charTable, styleTable, linkTable);
+      frontBuf = mountBuf;
 
-    // Ensure we're at startCount before measurements
-    latestRoot = null;
-    globalSetMsgCount!(() => startCount);
-    await new Promise<void>((r) => queueMicrotask(r));
-    root = await waitForCommit();
-    const { viewportGrid: resetGrid } = runPipeline(root, prevGrid);
-    prevGrid = resetGrid;
+      // Reset back to startCount
+      latestRoot = null;
+      globalSetMsgCount!(() => startCount);
+      await new Promise<void>((r) => queueMicrotask(r));
+      root = await waitForCommit();
+      const { backBuf: resetBuf } = runPipeline(root, frontBuf, charTable, styleTable, linkTable);
+      frontBuf = resetBuf;
+    }
 
     for (let i = 0; i < ITERATIONS; i++) {
       // Mount: startCount → startCount + MOUNT_BATCH
@@ -157,43 +181,44 @@ export async function runComponentMount(): Promise<void> {
       globalSetMsgCount!(() => startCount + MOUNT_BATCH);
       await new Promise<void>((r) => queueMicrotask(r));
       root = await waitForCommit();
-      const { viewportGrid: mountVP, output: mountOutput } = runPipeline(root, prevGrid);
+      const { backBuf: mountBuf, output: mountOutput } = runPipeline(root, frontBuf, charTable, styleTable, linkTable);
       const t1 = performance.now();
 
       mountLatencies.push(t1 - t0);
       mountBytes.push(mountOutput.length);
-      prevGrid = mountVP;
+      frontBuf = mountBuf;
 
       // Reset back to startCount for next iteration
       latestRoot = null;
       globalSetMsgCount!(() => startCount);
       await new Promise<void>((r) => queueMicrotask(r));
       root = await waitForCommit();
-      const { viewportGrid: resetVP2 } = runPipeline(root, prevGrid);
-      prevGrid = resetVP2;
+      const { backBuf: resetBuf2 } = runPipeline(root, frontBuf, charTable, styleTable, linkTable);
+      frontBuf = resetBuf2;
     }
 
-    // Measure single-cell update at startCount + MOUNT_BATCH
+    // Measure pipeline-only cost at startCount + MOUNT_BATCH (no React overhead)
     latestRoot = null;
     globalSetMsgCount!(() => startCount + MOUNT_BATCH);
     await new Promise<void>((r) => queueMicrotask(r));
     root = await waitForCommit();
-    const { viewportGrid: finalVP } = runPipeline(root, prevGrid);
-    prevGrid = finalVP;
+    const { backBuf: finalBuf } = runPipeline(root, frontBuf, charTable, styleTable, linkTable);
+    frontBuf = finalBuf;
 
-    // Use a counter-based ChatUI for single-cell updates — since MountApp doesn't
-    // have a counter, we just re-run the pipeline without state changes to measure
-    // the pipeline cost at the final size
     for (let i = 0; i < ITERATIONS; i++) {
       const t0 = performance.now();
-      // Re-run pipeline on same root (no state change = no React overhead, just pipeline)
-      layout(root, COLS, ROWS);
-      const ch = contentHeight(root);
-      const fg = rasterize(root, COLS, Math.max(ch + 10, ROWS), 0);
-      const ah = lastContentRow(fg) + 1;
-      const sb = Math.max(0, ah - ROWS);
-      const vp = extractViewport(fg, sb, ROWS);
-      diff(prevGrid, vp, 0, 0);
+      // Re-run pipeline on same root (no state change = no React overhead)
+      doLayout(root);
+      const ch = root.flexNode!.getComputedHeight();
+      const buf = createCellBuffer(COLS, Math.max(ch, ROWS));
+      paintTree(root, buf, frontBuf, charTable, styleTable, linkTable, 0);
+      expandDamageForShrink(frontBuf, buf);
+      const bStart = Math.max(0, buf.height - ROWS);
+      const fStart = Math.max(0, frontBuf.height - ROWS);
+      const bVp = viewportSlice(buf, bStart, ROWS);
+      const fVp = viewportSlice(frontBuf, fStart, ROWS);
+      diffBuffers(fVp, bVp, styleTable, charTable, linkTable, false);
+      frontBuf = buf;
       const t1 = performance.now();
       updateLatencies.push(t1 - t0);
     }

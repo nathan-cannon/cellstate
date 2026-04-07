@@ -32,16 +32,42 @@ export interface BoxProps extends StyleProps {
   display?: 'flex' | 'none';
   /** Stack direction for children. Default: 'column'. */
   flexDirection?: 'column' | 'row';
-  /** Spacing between children in rows. */
+  /** Spacing between children. */
   gap?: number;
+  /** Gap between columns (overrides gap for horizontal axis). */
+  columnGap?: number;
+  /** Gap between rows (overrides gap for vertical axis). */
+  rowGap?: number;
   /** Fixed width in columns. If omitted, fills available width. */
   width?: number;
   /** Fixed height in rows. If omitted, shrinks to fit children. */
   height?: number;
+  /** Width as percentage of parent (0-100). */
+  widthPercent?: number;
+  /** Height as percentage of parent (0-100). */
+  heightPercent?: number;
+  /** Minimum width in columns. */
+  minWidth?: number;
+  /** Maximum width in columns. */
+  maxWidth?: number;
+  /** Minimum height in rows. */
+  minHeight?: number;
+  /** Maximum height in rows. */
+  maxHeight?: number;
   /** Fill remaining space in a row layout. */
   flexGrow?: number | boolean;
+  /** How much this child should shrink relative to siblings. Default: 0. */
+  flexShrink?: number;
+  /** Initial main-axis size before flex grow/shrink. Number for columns, string like "50%" for percentage. */
+  flexBasis?: number | string;
+  /** Allow children to wrap to the next line. Default: 'nowrap'. */
+  flexWrap?: 'nowrap' | 'wrap' | 'wrap-reverse';
   /** Margin on all four sides (shorthand). Individual sides override. */
   margin?: number;
+  /** Shorthand for marginLeft + marginRight. */
+  marginX?: number;
+  /** Shorthand for marginTop + marginBottom. */
+  marginY?: number;
   /** Space before the box (vertical only). */
   marginTop?: number;
   /** Space after the box (vertical only). */
@@ -52,6 +78,10 @@ export interface BoxProps extends StyleProps {
   marginRight?: number;
   /** Padding on all four sides (shorthand). Individual sides override. */
   padding?: number;
+  /** Shorthand for paddingLeft + paddingRight. */
+  paddingX?: number;
+  /** Shorthand for paddingTop + paddingBottom. */
+  paddingY?: number;
   /** Left padding inside the box. */
   paddingLeft?: number;
   /** Right padding inside the box. */
@@ -66,8 +96,26 @@ export interface BoxProps extends StyleProps {
   borderColor?: string;
   /** Cross-axis alignment of children. Default: 'stretch'. */
   alignItems?: 'stretch' | 'center' | 'flex-start' | 'flex-end';
+  /** Override parent's alignItems for this child. */
+  alignSelf?: 'auto' | 'stretch' | 'flex-start' | 'center' | 'flex-end';
+  /** Cross-axis distribution of multi-line content (when flexWrap is used). */
+  alignContent?: 'stretch' | 'flex-start' | 'center' | 'flex-end' | 'space-between' | 'space-around' | 'space-evenly';
   /** Main-axis distribution of children. Only effective when the container has extra space (e.g. fixed height). Default: 'flex-start'. */
   justifyContent?: 'flex-start' | 'center' | 'flex-end' | 'space-between' | 'space-around' | 'space-evenly';
+  /** Positioning mode. 'absolute' removes the node from normal flow. Default: 'relative'. */
+  position?: 'relative' | 'absolute';
+  /** Offset from top when position='absolute'. */
+  top?: number;
+  /** Offset from left when position='absolute'. */
+  left?: number;
+  /** Offset from right when position='absolute'. */
+  right?: number;
+  /** Offset from bottom when position='absolute'. */
+  bottom?: number;
+  /** Content overflow behavior. Default: 'visible'. */
+  overflow?: 'visible' | 'hidden';
+  /** Width-to-height ratio (e.g. 2 means width is 2x height). */
+  aspectRatio?: number;
   /** Heading depth from markdown (passthrough, not consumed by layout/rasterizer). */
   depth?: number;
   /** Language hint from markdown code blocks (passthrough, not consumed by layout/rasterizer). */
@@ -110,6 +158,18 @@ export interface TextProps extends StyleProps {
  * the exact props from TextProps so our custom props pass the check.
  * This is scoped to only the props we use, not an open index signature.
  */
+/**
+ * Props for the `<raw-ansi>` intrinsic element. Bypasses text wrapping and
+ * segment painting — writes pre-rendered ANSI strings directly to the cell buffer.
+ */
+export interface RawAnsiProps {
+  /** Pre-rendered ANSI lines. Each element is one terminal row, already wrapped to width. */
+  lines: string[];
+  /** Column width the producer wrapped to. Used as fixed Yoga leaf width. */
+  rawWidth: number;
+  key?: React.Key;
+}
+
 declare module 'react' {
   // Augment SVGTextElementAttributes with our TextProps fields so the
   // intersection type (SVGTextElementAttributes & TextProps) accepts them.
@@ -122,6 +182,7 @@ declare module 'react' {
     interface IntrinsicElements {
       box: BoxProps;
       text: TextProps;
+      'raw-ansi': RawAnsiProps;
     }
   }
 }

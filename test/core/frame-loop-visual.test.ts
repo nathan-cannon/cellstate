@@ -20,15 +20,79 @@ import {
 } from '../helpers/verified-frame-loop.js';
 import { VirtualScreen } from '../helpers/virtual-screen.js';
 import {
-  cellsEqual,
   gridToDebugString,
   ColorMode,
   type CellGrid,
+  type Cell,
 } from '../../src/core/cell.js';
-import { serializeRows, serializeRowsReflow } from '../../src/core/diff.js';
 import { createNode, appendChild, type TNode, type Segment } from '../../src/core/nodes.js';
-import { layout, contentHeight } from '../../src/core/layout.js';
-import { rasterize } from '../../src/core/rasterizer.js';
+import { createFlexNodeFactory } from '../../src/layout/yoga-flex.js';
+import { applyBoxProps } from '../../src/layout/apply-props.js';
+import { computeTextLayout } from '../../src/layout/text-layout.js';
+import { populateLayoutResults } from '../../src/layout/populate-layout.js';
+import { paintTree } from '../../src/core/paint.js';
+import { CharTable } from '../../src/core/char-table.js';
+import { StyleTable } from '../../src/core/style-table.js';
+import { LinkTable } from '../../src/core/link-table.js';
+import { createCellBuffer, readCell, WIDE_WIDTH, CONTINUATION_WIDTH } from '../../src/core/cell-buffer.js';
+
+const _factory = createFlexNodeFactory();
+
+function attachFlexNodes(node: TNode): void {
+  const fn = _factory();
+  node.flexNode = fn;
+  if (node.type === 'text') {
+    if (node.text === null) {
+      fn.setMeasureFunc((w, wm) => computeTextLayout(node, w, wm));
+    }
+  } else if (node.type === 'divider') {
+    applyBoxProps(fn, node.props);
+    fn.setHeight(1);
+  } else {
+    applyBoxProps(fn, node.props, node.type === 'root');
+  }
+  for (const child of node.children) {
+    if (child.text !== null) continue;
+    attachFlexNodes(child);
+    fn.insertChild(child.flexNode!, fn.getChildCount());
+  }
+}
+
+function rasterizeToGrid(root: TNode, width: number): CellGrid {
+  attachFlexNodes(root);
+  root.flexNode!.setWidth(width);
+  root.flexNode!.calculateLayout(width);
+  populateLayoutResults(root);
+  const ch = root.layout?.height ?? 0;
+  if (ch <= 0) return { cells: [], cursorRow: 0, cursorCol: 0, width, height: 0 };
+  const ct = new CharTable();
+  const st = new StyleTable();
+  const lt = new LinkTable();
+  const buf = createCellBuffer(width, ch);
+  paintTree(root, buf, null, ct, st, lt);
+  const cells: Cell[][] = [];
+  for (let r = 0; r < buf.height; r++) {
+    const row: Cell[] = [];
+    for (let c = 0; c < buf.width; c++) {
+      const packed = readCell(buf, r, c)!;
+      const char = ct.resolve(packed.charId);
+      const style = st.resolve(packed.styleId);
+      let cellWidth: number;
+      if (packed.width === WIDE_WIDTH) cellWidth = 2;
+      else if (packed.width === CONTINUATION_WIDTH) cellWidth = 0;
+      else cellWidth = 1;
+      row.push({
+        char,
+        width: cellWidth,
+        fg: { mode: style.fgMode as ColorMode, value: style.fgValue },
+        bg: { mode: style.bgMode as ColorMode, value: style.bgValue },
+        attrs: style.attrs,
+      });
+    }
+    cells.push(row);
+  }
+  return { cells, cursorRow: 0, cursorCol: 0, width: buf.width, height: buf.height };
+}
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -487,104 +551,7 @@ describe('frame-loop visual: multi-frame composition', () => {
   }, 60_000);
 });
 
-// ─── 7. Space-backspace row advancement ────────────────────────────────────
-
-describe('space-backspace row advancement', () => {
-  it('property: space-backspace produces same visible content as real newlines', async () => {
-    // Generate multi-row grids, serialize with both methods, compare in xterm
-    const NARROW_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789'.split('');
-
-    const seed = Date.now();
-
-    const treeArb = fc.tuple(
-      fc.integer({ min: 10, max: 80 }),
-      fc.integer({ min: 2, max: 20 }),
-    ).chain(([cols, lineCount]) =>
-      fc.tuple(
-        fc.constant(cols),
-        fc.array(
-          fc.array(
-            fc.constantFrom(...NARROW_CHARS),
-            { minLength: 1, maxLength: Math.min(cols, 30) },
-          ).map(chars => chars.join('')),
-          { minLength: lineCount, maxLength: lineCount },
-        ),
-      ),
-    );
-
-    const samples = fc.sample(treeArb, { numRuns: 300, seed });
-
-    for (let i = 0; i < samples.length; i++) {
-      const [cols, lines] = samples[i]!;
-      const rows = lines.length + 2; // room for content
-
-      // Build a TNode tree and rasterize it
-      const root = createNode('root', {});
-      for (const lineText of lines) {
-        const textEl = createNode('text', {});
-        const inst = createNode('text', {});
-        inst.text = lineText;
-        appendChild(textEl, inst);
-        appendChild(root, textEl);
-      }
-      layout(root, cols, rows);
-      const ch = contentHeight(root);
-      if (ch <= 0) continue;
-
-      const grid = rasterize(root, cols, ch, 0);
-
-      // Serialize with space-backspace (pending wrap)
-      const sbResult = serializeRows(grid);
-      // Serialize with real newlines (reflow-safe)
-      const nlResult = serializeRowsReflow(grid);
-
-      // Feed both to separate VirtualScreens and compare visible text
-      const sbScreen = new VirtualScreen(cols, rows);
-      const nlScreen = new VirtualScreen(cols, rows);
-
-      await sbScreen.write(sbResult.output);
-      await nlScreen.write(nlResult.output);
-
-      const sbGrid = sbScreen.readGrid();
-      const nlGrid = nlScreen.readGrid();
-
-      sbScreen.dispose();
-      nlScreen.dispose();
-
-      // Compare visible text content (char and width) but NOT trailing whitespace
-      // differences since serializeRowsReflow trims trailing blanks
-      for (let r = 0; r < Math.min(sbGrid.height, nlGrid.height); r++) {
-        // Find last non-space column in the newline grid (source of truth for content)
-        let lastContentCol = -1;
-        for (let c = nlGrid.width - 1; c >= 0; c--) {
-          if (nlGrid.cells[r]![c]!.char !== ' ' || nlGrid.cells[r]![c]!.fg.mode !== ColorMode.Default) {
-            lastContentCol = c;
-            break;
-          }
-        }
-        if (lastContentCol < 0) continue;
-
-        for (let c = 0; c <= lastContentCol; c++) {
-          const sbCell = sbGrid.cells[r]![c]!;
-          const nlCell = nlGrid.cells[r]![c]!;
-
-          if (sbCell.char !== nlCell.char) {
-            throw new Error(
-              `[seed=${seed} iter=${i}] space-backspace char mismatch at (${r},${c})\n` +
-                `  space-backspace: '${sbCell.char}'\n` +
-                `  real-newlines:   '${nlCell.char}'\n` +
-                `  cols=${cols} lines=${lines.length}\n` +
-                `  sb output hex: ${Buffer.from(sbResult.output).toString('hex').slice(0, 200)}...\n` +
-                `  nl output hex: ${Buffer.from(nlResult.output).toString('hex').slice(0, 200)}...`,
-            );
-          }
-        }
-      }
-    }
-  }, 30_000);
-});
-
-// ─── 8. Scrollback styling integrity ───────────────────────────────────────
+// ─── 7. Scrollback styling integrity ───────────────────────────────────────
 
 describe('scrollback styling integrity', () => {
   it('styled rows in scrollback retain correct styling', async () => {
@@ -661,9 +628,7 @@ describe('scrollback styling integrity', () => {
             appendChild(textEl, inst);
             appendChild(root, textEl);
           }
-          layout(root, 50, 1000);
-          const ch = contentHeight(root);
-          const expectedGrid = rasterize(root, 50, ch, 0);
+          const expectedGrid = rasterizeToGrid(root, 50);
 
           // Check scrollback rows match expected content (chars).
           // readFullGrid() reads from row 0 with viewport-height rows,

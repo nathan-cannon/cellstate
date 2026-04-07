@@ -26,6 +26,10 @@ export interface PerfCounts {
   framesGrowth: number;
   framesFullRedraw: number;
   framesSkipped: number;          // update frames where diff output was empty
+  growthFrames: number;            // frames with content growth
+  growthRowsEmitted: number;      // rows serialized by serializeNewRows
+  damageCells: number;            // damage.width * damage.height per frame
+  damageSkippedCells: number;     // viewportCells - damageCells per frame
 
   // Frame loop I/O
   bytesWritten: number;           // total bytes emitted to stdout
@@ -82,10 +86,22 @@ export interface PerfCounts {
   bgFillCells: number;               // cells set by fillBackground
   borderCells: number;               // cells set by drawBorder
 
+  // Incremental paint (blit-or-paint decisions)
+  subtreeBlits: number;              // subtrees blitted (skipped entirely)
+  subtreeBlitCells: number;          // total cells blitted
+  subtreesPainted: number;           // subtrees painted normally
+  overflowTaintForced: number;       // sibling contamination forced a paint
+  layoutMovementFrames: number;      // frames where layout positions changed
+
   // Width helpers (counted at callsites in layout/rasterizer)
   stringDisplayWidthCalls: number;
   sliceToWidthCalls: number;
   sliceFromEndToWidthCalls: number;
+
+  // Raw ANSI painting
+  walkNodeRawAnsi: number;
+  paintRawAnsiCalls: number;
+  rawAnsiCellsWritten: number;
 
   // Grapheme cluster events (counted in rasterizeText and wrapSingleLine)
   vs16Upgrades: number;
@@ -118,6 +134,7 @@ export interface PerfTimings {
   rasterizeText: number;
   fillBackground: number;
   drawBorder: number;
+  paintRawAnsi: number;
 }
 
 /** A point-in-time snapshot returned by `perf.snapshot()`. */
@@ -163,6 +180,10 @@ function zeroCounts(): PerfCounts {
     framesGrowth: 0,
     framesFullRedraw: 0,
     framesSkipped: 0,
+    growthFrames: 0,
+    growthRowsEmitted: 0,
+    damageCells: 0,
+    damageSkippedCells: 0,
     bytesWritten: 0,
     bytesFullRedraw: 0,
     bytesGrowth: 0,
@@ -206,9 +227,17 @@ function zeroCounts(): PerfCounts {
     continuationCellsWritten: 0,
     bgFillCells: 0,
     borderCells: 0,
+    subtreeBlits: 0,
+    subtreeBlitCells: 0,
+    subtreesPainted: 0,
+    overflowTaintForced: 0,
+    layoutMovementFrames: 0,
     stringDisplayWidthCalls: 0,
     sliceToWidthCalls: 0,
     sliceFromEndToWidthCalls: 0,
+    walkNodeRawAnsi: 0,
+    paintRawAnsiCalls: 0,
+    rawAnsiCellsWritten: 0,
     vs16Upgrades: 0,
     skinToneJoins: 0,
     regionalIndicatorJoins: 0,
@@ -235,6 +264,7 @@ function zeroTimings(): PerfTimings {
     rasterizeText: 0,
     fillBackground: 0,
     drawBorder: 0,
+    paintRawAnsi: 0,
   };
 }
 

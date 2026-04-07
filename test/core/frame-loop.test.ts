@@ -68,9 +68,9 @@ function createMockStdout(cols = 40, rows = 10): MockStdout {
 async function flushReact(): Promise<void> {
   // React concurrent mode schedules via microtasks + scheduler.
   // Multiple rounds of microtask flushing ensures commits complete.
-  // The frame loop uses setTimeout(8) for initial frame, setTimeout(4)
-  // for normal gap, and setTimeout(50) after growth frames.
-  // 8 × 10ms = 80ms covers all timer variants.
+  // The frame loop is synchronous by default (renders inside
+  // resetAfterCommit); backpressure defers via setImmediate.
+  // 8 × 10ms = 80ms covers scheduler + drain callbacks.
   for (let i = 0; i < 8; i++) {
     await new Promise<void>((r) => setTimeout(r, 10));
   }
@@ -454,7 +454,7 @@ describe('frame-loop — growth frames', () => {
     await flushReact();
     loop.stop();
 
-    // Second frame should be a diff (small output), confirming prevGrid was set
+    // Second frame should be a diff (small output), confirming frontRef was set
     const laterWrites = stdout.written.slice(writesAfterGrowth).filter(
       (chunk) => !chunk.includes('\x1b[?25h'),
     );
@@ -883,9 +883,9 @@ describe('frame-loop — properties', () => {
     stdout = createMockStdout(40, 10);
   });
 
-  it('full redraw produces two stdout.write calls (clear + redraw)', async () => {
-    // Full redraw (first frame) produces 2 writes: clear+pre-paint and viewport redraw.
-    // Growth frames (subsequent) produce 1 write (pre-paint+scroll+redraw in one block).
+  it('full redraw produces a single stdout.write call (atomic block)', async () => {
+    // Full redraw (first frame) produces 1 write: erase + scroll + viewport
+    // all inside a single atomic BSU/ESU block.
     const loop = createFrameLoop(stdout as any);
     const writesBefore = stdout.written.length;
     loop.start(makeLines(15));
@@ -894,8 +894,8 @@ describe('frame-loop — properties', () => {
     const frameWrites = stdout.written.slice(writesBefore).filter(
       (chunk) => chunk !== '\x1b[?25l',
     );
-    // First frame is doFullRedraw → 2 writes
-    expect(frameWrites.length).toBe(2);
+    // First frame is handleFullRedraw → 1 atomic write
+    expect(frameWrites.length).toBe(1);
 
     loop.stop();
   });

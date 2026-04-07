@@ -1,3 +1,5 @@
+import type { FlexNode } from '../layout/flex-node.js';
+
 export interface SegmentStyle {
   bold?: boolean;
   italic?: boolean;
@@ -34,17 +36,27 @@ export interface LayoutResult {
 }
 
 export interface TNode {
-  type: 'root' | 'box' | 'text' | 'divider';
+  type: 'root' | 'box' | 'text' | 'divider' | 'raw-ansi';
   props: Record<string, any>;
   children: TNode[];
   parent: TNode | null;
   text: string | null;
   layout: LayoutResult | null;
+  flexNode?: FlexNode;
+  _dirty?: boolean;
+  _childWasDetached?: boolean;
+  _prevBounds?: { x: number; y: number; width: number; height: number } | null;
+  _wrapCache?: {
+    width: number;
+    wrappedLines: WrappedLine[];
+    hangingIndent?: number;
+  } | null;
 }
 
 export function createNode(
   type: TNode['type'],
   props: Record<string, any> = {},
+  flexNode?: FlexNode,
 ): TNode {
   return {
     type,
@@ -53,6 +65,7 @@ export function createNode(
     parent: null,
     text: null,
     layout: null,
+    flexNode,
   };
 }
 
@@ -62,9 +75,15 @@ export function appendChild(parent: TNode, child: TNode): void {
   }
   child.parent = parent;
   parent.children.push(child);
+  if (parent.flexNode && child.flexNode) {
+    parent.flexNode.insertChild(child.flexNode, parent.children.length - 1);
+  }
 }
 
 export function removeChild(parent: TNode, child: TNode): void {
+  if (parent.flexNode && child.flexNode) {
+    parent.flexNode.removeChild(child.flexNode);
+  }
   const index = parent.children.indexOf(child);
   if (index >= 0) {
     parent.children.splice(index, 1);
@@ -84,7 +103,13 @@ export function insertBefore(
   const index = parent.children.indexOf(before);
   if (index >= 0) {
     parent.children.splice(index, 0, child);
+    if (parent.flexNode && child.flexNode) {
+      parent.flexNode.insertChild(child.flexNode, index);
+    }
   } else {
     parent.children.push(child);
+    if (parent.flexNode && child.flexNode) {
+      parent.flexNode.insertChild(child.flexNode, parent.children.length - 1);
+    }
   }
 }

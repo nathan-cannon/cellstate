@@ -1,12 +1,12 @@
 /**
- * Flexbox-inspired layout engine. Computes position and size for every TNode.
+ * Text wrapping and truncation utilities.
  * All measurements are in terminal columns (display width), not string length.
  */
-import type { TNode, Segment, WrappedLine, StyledRun } from './nodes.js';
+import type { Segment, WrappedLine, StyledRun } from './nodes.js';
 import { stringDisplayWidth, sliceToWidth, sliceFromEndToWidth, charDisplayWidth, isTextPresentationEmoji, isSkinToneModifier, isRegionalIndicator } from './width.js';
 import type { Perf } from './perf.js';
 
-function truncateText(
+export function truncateText(
   text: string,
   width: number,
   mode: string,
@@ -241,10 +241,40 @@ export function wrapSegments(
     return [];
   }
 
+  // --- Single-segment fast path ---
+  if (filtered.length === 1) {
+    const seg = filtered[0]!;
+    const plainLines = wrapText(seg.text, width, hangingIndent, perf);
+    if (plainLines.length === 0) {
+      if (perf) perf.timeEnd('wrapSegments');
+      return [];
+    }
+    const style = seg.style;
+    const result: WrappedLine[] = [];
+    for (let i = 0; i < plainLines.length; i++) {
+      const text = plainLines[i]!;
+      result.push(style ? [{ text, style }] : [{ text }]);
+    }
+    if (perf) perf.timeEnd('wrapSegments');
+    return result;
+  }
+
   const concat = filtered.map(s => s.text).join('');
   if (!concat) {
     if (perf) perf.timeEnd('wrapSegments');
     return [];
+  }
+
+  // --- No-wrap fast path ---
+  if (!concat.includes('\n') && stringDisplayWidth(concat) <= width) {
+    const runs: StyledRun[] = [];
+    for (let i = 0; i < filtered.length; i++) {
+      const seg = filtered[i]!;
+      const style = seg.style;
+      runs.push(style ? { text: seg.text, style } : { text: seg.text });
+    }
+    if (perf) perf.timeEnd('wrapSegments');
+    return [runs];
   }
 
   // Compute segment boundaries in the concatenated string
@@ -263,19 +293,25 @@ export function wrapSegments(
     return [];
   }
 
-  // Map each plain line back to styled runs
+  // Map each plain line back to styled runs (advancing scan index)
   const result: WrappedLine[] = [];
   let globalOffset = 0;
+  let scanStart = 0;
 
   for (let li = 0; li < plainLines.length; li++) {
     const line = plainLines[li]!;
     const lineStart = globalOffset;
     const lineEnd = lineStart + line.length;
 
+    // Advance scanStart past bounds fully consumed by earlier lines
+    while (scanStart < bounds.length && bounds[scanStart]!.end <= lineStart) {
+      scanStart++;
+    }
+
     const runs: StyledRun[] = [];
 
-    for (const b of bounds) {
-      if (b.end <= lineStart) continue;
+    for (let bi = scanStart; bi < bounds.length; bi++) {
+      const b = bounds[bi]!;
       if (b.start >= lineEnd) break;
 
       const runStart = Math.max(b.start, lineStart);
@@ -303,569 +339,3 @@ export function wrapSegments(
   return result;
 }
 
-/** Resolve all four margin sides from shorthand + individual overrides. */
-function resolveMargins(node: TNode): { top: number; bottom: number; left: number; right: number } {
-  const m = node.props.margin ?? 0;
-  return {
-    top: node.props.marginTop ?? m,
-    bottom: node.props.marginBottom ?? m,
-    left: node.props.marginLeft ?? m,
-    right: node.props.marginRight ?? m,
-  };
-}
-
-/** Compute the natural (content) width of a laid-out node. */
-function naturalWidth(node: TNode, perf?: Perf): number {
-  if (node.type === 'text' && node.layout?.wrappedLines) {
-    let max = 0;
-    for (const line of node.layout.wrappedLines) {
-      let lineLen = 0;
-      for (const run of line) {
-        if (perf) perf.count('stringDisplayWidthCalls');
-        lineLen += stringDisplayWidth(run.text);
-      }
-      max = Math.max(max, lineLen);
-    }
-    return max;
-  }
-  return node.layout?.width ?? 0;
-}
-
-/** Recursively shift a node and all its descendants by dx on the x-axis. */
-function shiftNodeX(node: TNode, dx: number): void {
-  if (!node.layout) return;
-  node.layout.x += dx;
-  for (const child of node.children) {
-    shiftNodeX(child, dx);
-  }
-}
-
-/** Recursively shift a node and all its descendants by dy on the y-axis. */
-function shiftNodeY(node: TNode, dy: number): void {
-  if (!node.layout) return;
-  node.layout.y += dy;
-  for (const child of node.children) {
-    shiftNodeY(child, dy);
-  }
-}
-
-/** Redistribute children along the main axis (column) when extra space exists. */
-function applyJustifyContent(
-  node: TNode,
-  startY: number,
-  contentHeight: number,
-  containerHeight: number,
-): void {
-  const justify = node.props.justifyContent as string | undefined;
-  if (!justify || justify === 'flex-start') return;
-
-  const children = node.children.filter(c => c.layout && c.props.display !== 'none');
-  if (children.length === 0) return;
-
-  const extraSpace = containerHeight - contentHeight;
-  if (extraSpace <= 0) return;
-
-  let offset = 0;
-  let gap = 0;
-
-  switch (justify) {
-    case 'flex-end':
-      offset = extraSpace;
-      break;
-    case 'center':
-      offset = Math.floor(extraSpace / 2);
-      break;
-    case 'space-between':
-      if (children.length > 1) {
-        gap = extraSpace / (children.length - 1);
-      }
-      break;
-    case 'space-around': {
-      const space = extraSpace / children.length;
-      offset = Math.floor(space / 2);
-      gap = space;
-      break;
-    }
-    case 'space-evenly': {
-      const space = extraSpace / (children.length + 1);
-      offset = Math.floor(space);
-      gap = space;
-      break;
-    }
-  }
-
-  let cumulativeGap = 0;
-  for (let i = 0; i < children.length; i++) {
-    const shift = Math.floor(offset + cumulativeGap);
-    if (shift !== 0) {
-      shiftNodeY(children[i]!, shift);
-    }
-    cumulativeGap += gap;
-  }
-}
-
-/** Redistribute children along the main axis (row) when extra space exists. */
-function applyJustifyContentRow(
-  node: TNode,
-  startX: number,
-  contentWidth: number,
-  containerWidth: number,
-): void {
-  const justify = node.props.justifyContent as string | undefined;
-  if (!justify || justify === 'flex-start') return;
-
-  const children = node.children.filter(c => c.layout && c.props.display !== 'none');
-  if (children.length === 0) return;
-
-  const extraSpace = containerWidth - contentWidth;
-  if (extraSpace <= 0) return;
-
-  let offset = 0;
-  let gap = 0;
-
-  switch (justify) {
-    case 'flex-end':
-      offset = extraSpace;
-      break;
-    case 'center':
-      offset = Math.floor(extraSpace / 2);
-      break;
-    case 'space-between':
-      if (children.length > 1) {
-        gap = extraSpace / (children.length - 1);
-      }
-      break;
-    case 'space-around': {
-      const space = extraSpace / children.length;
-      offset = Math.floor(space / 2);
-      gap = space;
-      break;
-    }
-    case 'space-evenly': {
-      const space = extraSpace / (children.length + 1);
-      offset = Math.floor(space);
-      gap = space;
-      break;
-    }
-  }
-
-  let cumulativeGap = 0;
-  for (let i = 0; i < children.length; i++) {
-    const shift = Math.floor(offset + cumulativeGap);
-    if (shift !== 0) {
-      shiftNodeX(children[i]!, shift);
-    }
-    cumulativeGap += gap;
-  }
-}
-
-/** Apply alignItems offset to a child after it has been laid out. */
-function applyAlignment(
-  align: string | undefined,
-  child: TNode,
-  childWidth: number,
-  perf?: Perf,
-): void {
-  if (!align || align === 'stretch' || align === 'flex-start') return;
-
-  // Text nodes: store alignment mode in layout for per-line centering by the rasterizer
-  if (child.type === 'text' && child.layout) {
-    child.layout.textAlign = align === 'center' ? 'center' : 'right';
-    return;
-  }
-
-  // Box nodes: block-shift the entire subtree
-  const nw = naturalWidth(child, perf);
-  const slack = childWidth - nw;
-  if (slack <= 0) return;
-
-  const dx = align === 'center' ? Math.floor(slack / 2) : slack; // flex-end
-  shiftNodeX(child, dx);
-}
-
-/** Clear all layout fields in the tree before computing. */
-export function clearLayout(node: TNode): void {
-  node.layout = null;
-  for (const child of node.children) {
-    clearLayout(child);
-  }
-}
-
-/** Get the text content from a text node (may be on the node or a text-instance child). */
-function getTextContent(node: TNode): string {
-  if (node.text !== null) return node.text;
-  // Text element's string content lives in text-instance children.
-  // Multiple children arise from mixed content like `<Text>Count: {n}</Text>`.
-  let result = '';
-  for (const child of node.children) {
-    if (child.text !== null) result += child.text;
-  }
-  return result;
-}
-
-/**
- * Compute layout for the entire tree.
- * Mutates each node's `layout` field in place.
- * All children are laid out in normal document flow.
- */
-export function layout(
-  root: TNode,
-  termWidth: number,
-  _termHeight: number,
-  perf?: Perf,
-): void {
-  clearLayout(root);
-
-  root.layout = { x: 0, y: 0, width: termWidth, height: 0 };
-
-  layoutChildrenList(root.children, root, 0, 0, termWidth, perf);
-
-  root.layout.height = computeChildrenHeightFromList(root.children, 0);
-}
-
-/**
- * Returns the total vertical space the content occupies after layout.
- */
-export function contentHeight(root: TNode): number {
-  if (!root.layout) return 0;
-  return root.layout.height;
-}
-
-function layoutChildren(
-  node: TNode,
-  startX: number,
-  startY: number,
-  availableWidth: number,
-  perf?: Perf,
-): void {
-  const flexDirection = node.props.flexDirection ?? 'column';
-
-  if (flexDirection === 'row') {
-    layoutRow(node, startX, startY, availableWidth, perf);
-  } else {
-    layoutColumn(node, startX, startY, availableWidth, perf);
-  }
-}
-
-/** Layout an arbitrary list of children as a column (used for root's normal children). */
-function layoutChildrenList(
-  children: TNode[],
-  parent: TNode,
-  startX: number,
-  startY: number,
-  availableWidth: number,
-  perf?: Perf,
-): void {
-  const gap = parent.props.gap ?? 0;
-  const align = parent.props.alignItems as string | undefined;
-  let y = startY;
-
-  for (let i = 0; i < children.length; i++) {
-    const child = children[i]!;
-    const margin = resolveMargins(child);
-    y += margin.top;
-
-    const childX = startX + margin.left;
-    const childWidth = Math.max(availableWidth - margin.left - margin.right, 0);
-    layoutNode(child, childX, y, childWidth, perf);
-    applyAlignment(align, child, childWidth, perf);
-
-    y += child.layout!.height + margin.bottom;
-    if (i < children.length - 1) {
-      y += gap;
-    }
-  }
-
-  if (parent.props.height != null) {
-    const border = parent.props.borderStyle ? 1 : 0;
-    const pad = parent.props.padding ?? 0;
-    const paddingTop = (parent.props.paddingTop ?? pad) + border;
-    const paddingBottom = (parent.props.paddingBottom ?? pad) + border;
-    const childrenHeight = computeChildrenHeightFromList(children, startY);
-    applyJustifyContent(parent, startY, childrenHeight, parent.props.height - paddingTop - paddingBottom);
-  }
-}
-
-/** Compute height from an arbitrary list of children (used for root's normal children). */
-function computeChildrenHeightFromList(children: TNode[], startY: number): number {
-  if (children.length === 0) return 0;
-
-  let maxBottom = startY;
-  for (const child of children) {
-    if (child.layout) {
-      const margin = resolveMargins(child);
-      maxBottom = Math.max(maxBottom, child.layout.y + child.layout.height + margin.bottom);
-    }
-  }
-  return maxBottom - startY;
-}
-
-function layoutColumn(
-  node: TNode,
-  startX: number,
-  startY: number,
-  availableWidth: number,
-  perf?: Perf,
-): void {
-  if (perf) {
-    perf.count('layoutColumnCalls');
-    perf.timeStart('layoutColumn');
-  }
-  const gap = node.props.gap ?? 0;
-  const align = node.props.alignItems as string | undefined;
-  let y = startY;
-
-  for (let i = 0; i < node.children.length; i++) {
-    const child = node.children[i]!;
-    const margin = resolveMargins(child);
-    y += margin.top;
-
-    const childX = startX + margin.left;
-    const childWidth = Math.max(availableWidth - margin.left - margin.right, 0);
-    layoutNode(child, childX, y, childWidth, perf);
-    applyAlignment(align, child, childWidth, perf);
-
-    y += child.layout!.height + margin.bottom;
-    if (i < node.children.length - 1) {
-      y += gap;
-    }
-  }
-
-  if (node.props.height != null) {
-    const border = node.props.borderStyle ? 1 : 0;
-    const pad = node.props.padding ?? 0;
-    const paddingTop = (node.props.paddingTop ?? pad) + border;
-    const paddingBottom = (node.props.paddingBottom ?? pad) + border;
-    const childrenHeight = computeChildrenHeight(node, startY);
-    applyJustifyContent(node, startY, childrenHeight, node.props.height - paddingTop - paddingBottom);
-  }
-  if (perf) perf.timeEnd('layoutColumn');
-}
-
-function layoutRow(
-  node: TNode,
-  startX: number,
-  startY: number,
-  availableWidth: number,
-  perf?: Perf,
-): void {
-  if (perf) {
-    perf.count('layoutRowCalls');
-    perf.timeStart('layoutRow');
-  }
-  const children = node.children;
-
-  // Calculate fixed width consumption (including horizontal margins) and count fill children
-  let fixedTotal = 0;
-  let fillCount = 0;
-
-  for (const child of children) {
-    const margin = resolveMargins(child);
-    const hMargin = margin.left + margin.right;
-    if (child.props.width != null) {
-      fixedTotal += Math.min(child.props.width, availableWidth) + hMargin;
-    } else if (child.props.flexGrow) {
-      fixedTotal += hMargin;
-      fillCount++;
-    } else {
-      // Shrink-to-content: contributes 0 for boxes, need to compute for text
-      // For now treat as 0 (spec says this case doesn't arise in practice)
-      fixedTotal += hMargin;
-    }
-  }
-
-  const remainingWidth = Math.max(availableWidth - fixedTotal, 0);
-  const fillWidth = fillCount > 0 ? Math.floor(remainingWidth / fillCount) : 0;
-  const fillRemainder = fillCount > 0 ? remainingWidth % fillCount : 0;
-
-  let x = startX;
-  let fillIndex = 0;
-  let maxHeight = 0;
-
-  for (const child of children) {
-    const margin = resolveMargins(child);
-    x += margin.left;
-    let childWidth: number;
-
-    if (child.props.width != null) {
-      childWidth = Math.min(child.props.width, availableWidth);
-    } else if (child.props.flexGrow) {
-      childWidth = fillWidth;
-      // First fill child gets the remainder from odd division
-      if (fillIndex === 0) {
-        childWidth += fillRemainder;
-      }
-      fillIndex++;
-    } else {
-      childWidth = 0;
-    }
-
-    childWidth = Math.max(childWidth, 0);
-    layoutNode(child, x, startY, childWidth, perf);
-
-    x += childWidth + margin.right;
-    maxHeight = Math.max(maxHeight, child.layout!.height);
-  }
-
-  // Set row children heights are already set; update parent awareness of row height
-  // The parent reads child.layout.height, which is set by layoutNode
-
-  // justifyContent along the x-axis for rows
-  const usedWidth = x - startX;
-  applyJustifyContentRow(node, startX, usedWidth, availableWidth);
-  if (perf) perf.timeEnd('layoutRow');
-}
-
-function layoutNode(
-  node: TNode,
-  x: number,
-  y: number,
-  availableWidth: number,
-  perf?: Perf,
-): void {
-  if (node.props.display === 'none') {
-    node.layout = { x: 0, y: 0, width: 0, height: 0 };
-    return;
-  }
-
-  if (node.type === 'divider') {
-    node.layout = { x, y, width: availableWidth, height: 1 };
-    return;
-  }
-
-  if (node.type === 'text') {
-    layoutTextNode(node, x, y, availableWidth, perf);
-    return;
-  }
-
-  // Box node
-  const border = node.props.borderStyle ? 1 : 0;
-  const pad = node.props.padding ?? 0;
-  const paddingLeft = (node.props.paddingLeft ?? pad) + border;
-  const paddingRight = (node.props.paddingRight ?? pad) + border;
-  const paddingTop = (node.props.paddingTop ?? pad) + border;
-  const paddingBottom = (node.props.paddingBottom ?? pad) + border;
-  const nodeWidth = Math.min(node.props.width ?? availableWidth, availableWidth);
-  const contentWidth = Math.max(nodeWidth - paddingLeft - paddingRight, 0);
-  const contentX = x + paddingLeft;
-  const contentY = y + paddingTop;
-
-  node.layout = { x, y, width: nodeWidth, height: 0 };
-
-  layoutChildren(node, contentX, contentY, contentWidth, perf);
-
-  // Compute height from children
-  node.layout.height = computeChildrenHeight(node, contentY) + paddingTop + paddingBottom;
-
-  // Fixed height overrides computed height
-  if (node.props.height != null) {
-    node.layout.height = Math.max(node.props.height, 0);
-  }
-}
-
-function layoutTextNode(
-  node: TNode,
-  x: number,
-  y: number,
-  availableWidth: number,
-  perf?: Perf,
-): void {
-  if (perf) {
-    perf.count('layoutTextNodes');
-    perf.timeStart('layoutTextNode');
-  }
-  if (node.props.display === 'none') {
-    node.layout = { x: 0, y: 0, width: 0, height: 0 };
-    if (perf) perf.timeEnd('layoutTextNode');
-    return;
-  }
-
-  const hangingIndent = node.props.hangingIndent as number | undefined;
-  const segments = node.props.segments as Segment[] | undefined;
-
-  if (segments) {
-    if (perf) perf.count('layoutTextNodesSegmented');
-    let wrappedLines = wrapSegments(segments, availableWidth, hangingIndent, perf);
-    const wrapMode = node.props.wrap ?? 'wrap';
-    if (wrapMode !== 'wrap' && wrappedLines.length > 1) {
-      // Truncation collapses segments into plain text, losing per-segment styles.
-      // Acceptable for v1. Truncated text is typically short (file paths, labels).
-      const fullText = wrappedLines.map(line =>
-        line.map(run => run.text).join('')
-      ).join(' ');
-      const truncated = truncateText(fullText, availableWidth, wrapMode, perf);
-      wrappedLines = [[{ text: truncated }]];
-    }
-    node.layout = {
-      x,
-      y,
-      width: availableWidth,
-      height: wrappedLines.length,
-      wrappedLines,
-      hangingIndent: hangingIndent ?? undefined,
-    };
-    if (perf) perf.timeEnd('layoutTextNode');
-    return;
-  }
-
-  const content = getTextContent(node);
-
-  if (!content || availableWidth <= 0) {
-    node.layout = {
-      x,
-      y,
-      width: availableWidth,
-      height: 0,
-      wrappedLines: [],
-      hangingIndent: hangingIndent ?? undefined,
-    };
-    if (perf) perf.timeEnd('layoutTextNode');
-    return;
-  }
-
-  const lines = wrapText(content, availableWidth, hangingIndent, perf);
-  let wrappedLines: WrappedLine[] = lines.map(line => [{ text: line }]);
-  const wrapMode = node.props.wrap ?? 'wrap';
-  if (wrapMode !== 'wrap' && wrappedLines.length > 1) {
-    const fullText = wrappedLines.map(line =>
-      line.map(run => run.text).join('')
-    ).join(' ');
-    const truncated = truncateText(fullText, availableWidth, wrapMode, perf);
-    wrappedLines = [[{ text: truncated }]];
-  }
-  node.layout = {
-    x,
-    y,
-    width: availableWidth,
-    height: wrappedLines.length,
-    wrappedLines,
-    hangingIndent: hangingIndent ?? undefined,
-  };
-  if (perf) perf.timeEnd('layoutTextNode');
-}
-
-function computeChildrenHeight(node: TNode, startY: number): number {
-  if (node.children.length === 0) return 0;
-
-  const flexDirection = node.props.flexDirection ?? 'column';
-
-  if (flexDirection === 'row') {
-    let maxHeight = 0;
-    for (const child of node.children) {
-      if (child.layout) {
-        maxHeight = Math.max(maxHeight, child.layout.height);
-      }
-    }
-    return maxHeight;
-  }
-
-  // Column: height = bottom of last child (including marginBottom) - startY
-  let maxBottom = startY;
-  for (const child of node.children) {
-    if (child.layout) {
-      const margin = resolveMargins(child);
-      maxBottom = Math.max(maxBottom, child.layout.y + child.layout.height + margin.bottom);
-    }
-  }
-  return maxBottom - startY;
-}

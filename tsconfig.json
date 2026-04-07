@@ -13,7 +13,8 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "jsx": "react-jsx",
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "types": ["node", "bun-types"]
   },
   "include": ["src"],
   "exclude": ["src/**/__tests__", "src/**/tests", "dist", "node_modules", "examples"]

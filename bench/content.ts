@@ -5,11 +5,14 @@
  */
 import { createNode, appendChild, type TNode, type Segment } from '../src/core/nodes.js';
 import { highlightCode } from '../src/components/highlighter.js';
-import { flattenInline } from '../src/components/markdown.js';
+import { flattenInline } from '../src/components/markdown-inline.js';
 import { unified } from 'unified';
 import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 import type { PhrasingContent } from 'mdast';
+import type { FlexNodeFactory } from '../src/layout/flex-node.js';
+import { applyBoxProps } from '../src/layout/apply-props.js';
+import { computeTextLayout } from '../src/layout/text-layout.js';
 
 // ── Message data (shared with tui-benchmarks) ──
 
@@ -131,7 +134,7 @@ async function backfillSessions(batchSize = 500) {
 
 const mdParser = unified().use(remarkParse).use(remarkGfm);
 
-function parseMarkdownToSegments(markdown: string): Segment[] {
+export function parseMarkdownToSegments(markdown: string): Segment[] {
   const tree = mdParser.parse(markdown);
   const segments: Segment[] = [];
 
@@ -175,21 +178,46 @@ function parseMarkdownToSegments(markdown: string): Segment[] {
 // ── Tree builders ──
 
 /**
+ * Create a TNode with an optional FlexNode, mirroring the reconciler's
+ * createInstance logic for box/text/root nodes.
+ */
+function makeNode(
+  type: TNode['type'],
+  props: Record<string, any>,
+  factory?: FlexNodeFactory,
+): TNode {
+  const flexNode = factory ? factory() : undefined;
+  const node = createNode(type, props, flexNode);
+  if (flexNode) {
+    if (type === 'text') {
+      flexNode.setMeasureFunc((width, widthMode) =>
+        computeTextLayout(node, width, widthMode),
+      );
+    } else {
+      applyBoxProps(flexNode, props, type === 'root');
+    }
+  }
+  return node;
+}
+
+/**
  * Build a chat UI tree with N messages. Same visual output as the React ChatUI component.
+ * Pass a FlexNodeFactory to attach layout nodes (required for paintTree benchmarks).
  */
 export function buildChatTree(
   messageCount: number,
   counter: number,
   streamingText?: string,
+  factory?: FlexNodeFactory,
 ): TNode {
-  const root = createNode('root', {});
+  const root = makeNode('root', {}, factory);
 
   // Outer column box
-  const col = createNode('box', { flexDirection: 'column' });
+  const col = makeNode('box', { flexDirection: 'column' }, factory);
   appendChild(root, col);
 
   // Header
-  const header = createNode('text', { bold: true, fg: '#5599ff' });
+  const header = makeNode('text', { bold: true, fg: '#5599ff' }, factory);
   const headerTextNode = createNode('text', {});
   headerTextNode.text = headerText(messageCount);
   appendChild(header, headerTextNode);
@@ -203,15 +231,15 @@ export function buildChatTree(
       body = body + ' ' + streamingText;
     }
 
-    const msgBox = createNode('box', { flexDirection: 'column' });
+    const msgBox = makeNode('box', { flexDirection: 'column' }, factory);
 
-    const roleText = createNode('text', { bold: true, fg: isUser ? '#00cc66' : '#cc66ff' });
+    const roleText = makeNode('text', { bold: true, fg: isUser ? '#00cc66' : '#cc66ff' }, factory);
     const roleTextNode = createNode('text', {});
     roleTextNode.text = role;
     appendChild(roleText, roleTextNode);
     appendChild(msgBox, roleText);
 
-    const bodyText = createNode('text', {});
+    const bodyText = makeNode('text', {}, factory);
     const bodyTextNode = createNode('text', {});
     bodyTextNode.text = body;
     appendChild(bodyText, bodyTextNode);
@@ -221,7 +249,7 @@ export function buildChatTree(
   }
 
   // Input line
-  const input = createNode('text', {});
+  const input = makeNode('text', {}, factory);
   const inputTextNode = createNode('text', {});
   inputTextNode.text = inputLineText(counter);
   appendChild(input, inputTextNode);
@@ -232,14 +260,18 @@ export function buildChatTree(
 
 /**
  * Build a chat UI tree with markdown content (styled segments).
+ * Pass a FlexNodeFactory to attach layout nodes (required for paintTree benchmarks).
  */
-export function buildMarkdownChatTree(messageCount: number): TNode {
-  const root = createNode('root', {});
-  const col = createNode('box', { flexDirection: 'column' });
+export function buildMarkdownChatTree(
+  messageCount: number,
+  factory?: FlexNodeFactory,
+): TNode {
+  const root = makeNode('root', {}, factory);
+  const col = makeNode('box', { flexDirection: 'column' }, factory);
   appendChild(root, col);
 
   // Header
-  const header = createNode('text', { bold: true, fg: '#5599ff' });
+  const header = makeNode('text', { bold: true, fg: '#5599ff' }, factory);
   const headerTextNode = createNode('text', {});
   headerTextNode.text = headerText(messageCount);
   appendChild(header, headerTextNode);
@@ -248,16 +280,16 @@ export function buildMarkdownChatTree(messageCount: number): TNode {
   // Messages — alternate user plain text and assistant markdown
   for (let i = 0; i < messageCount; i++) {
     const { role, isUser } = getRole(i);
-    const msgBox = createNode('box', { flexDirection: 'column' });
+    const msgBox = makeNode('box', { flexDirection: 'column' }, factory);
 
-    const roleText = createNode('text', { bold: true, fg: isUser ? '#00cc66' : '#cc66ff' });
+    const roleText = makeNode('text', { bold: true, fg: isUser ? '#00cc66' : '#cc66ff' }, factory);
     const roleTextNode = createNode('text', {});
     roleTextNode.text = role;
     appendChild(roleText, roleTextNode);
     appendChild(msgBox, roleText);
 
     if (isUser) {
-      const bodyText = createNode('text', {});
+      const bodyText = makeNode('text', {}, factory);
       const bodyTextNode = createNode('text', {});
       bodyTextNode.text = getMessageBody(i);
       appendChild(bodyText, bodyTextNode);
@@ -266,7 +298,7 @@ export function buildMarkdownChatTree(messageCount: number): TNode {
       // Use markdown content with styled segments
       const mdIndex = Math.floor(i / 2) % MARKDOWN_MESSAGES.length;
       const segments = parseMarkdownToSegments(MARKDOWN_MESSAGES[mdIndex]!);
-      const bodyText = createNode('text', { segments });
+      const bodyText = makeNode('text', { segments }, factory);
       appendChild(msgBox, bodyText);
     }
 
@@ -274,7 +306,7 @@ export function buildMarkdownChatTree(messageCount: number): TNode {
   }
 
   // Input line
-  const input = createNode('text', {});
+  const input = makeNode('text', {}, factory);
   const inputTextNode = createNode('text', {});
   inputTextNode.text = inputLineText(0);
   appendChild(input, inputTextNode);
@@ -307,4 +339,111 @@ export function collectMarkdownSegments(messageCount: number): Segment[] {
     }
   }
   return allSegments.length > 0 ? allSegments : [{ text: 'placeholder' }];
+}
+
+// ── Code generation for bulk-update benchmarks ──
+
+const CODE_FRAGMENTS = [
+  'export interface Config {\n  host: string;\n  port: number;\n  debug: boolean;\n  retries: number;\n}',
+  'function validateInput(input: unknown): input is Config {\n  if (typeof input !== "object" || input === null) return false;\n  const obj = input as Record<string, unknown>;\n  return typeof obj.host === "string" && typeof obj.port === "number";\n}',
+  'async function fetchWithRetry(url: string, retries: number): Promise<Response> {\n  for (let attempt = 0; attempt < retries; attempt++) {\n    try {\n      const response = await fetch(url);\n      if (response.ok) return response;\n      console.warn(`Attempt ${attempt + 1} failed: ${response.status}`);\n    } catch (err) {\n      if (attempt === retries - 1) throw err;\n      await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));\n    }\n  }\n  throw new Error("Exhausted retries");\n}',
+  'class ConnectionPool {\n  private connections: Map<string, Connection> = new Map();\n  private maxSize: number;\n\n  constructor(maxSize = 10) {\n    this.maxSize = maxSize;\n  }\n\n  async acquire(key: string): Promise<Connection> {\n    const existing = this.connections.get(key);\n    if (existing && existing.isAlive()) return existing;\n    if (this.connections.size >= this.maxSize) {\n      await this.evictOldest();\n    }\n    const conn = await Connection.create(key);\n    this.connections.set(key, conn);\n    return conn;\n  }\n\n  private async evictOldest(): Promise<void> {\n    let oldest: string | null = null;\n    let oldestTime = Infinity;\n    for (const [key, conn] of this.connections) {\n      if (conn.lastUsed < oldestTime) {\n        oldest = key;\n        oldestTime = conn.lastUsed;\n      }\n    }\n    if (oldest) {\n      const conn = this.connections.get(oldest)!;\n      await conn.close();\n      this.connections.delete(oldest);\n    }\n  }\n}',
+  'function processEvents(events: Event[]): ProcessedResult[] {\n  const results: ProcessedResult[] = [];\n  const seen = new Set<string>();\n\n  for (const event of events) {\n    if (seen.has(event.id)) continue;\n    seen.add(event.id);\n\n    switch (event.type) {\n      case "create":\n        results.push({ id: event.id, action: "insert", data: event.payload });\n        break;\n      case "update":\n        results.push({ id: event.id, action: "merge", data: event.payload });\n        break;\n      case "delete":\n        results.push({ id: event.id, action: "remove", data: null });\n        break;\n      default:\n        console.warn(`Unknown event type: ${event.type}`);\n    }\n  }\n\n  return results;\n}',
+  '// Middleware chain for request processing\nfunction createMiddleware(config: Config) {\n  const logger = createLogger(config.debug);\n  const limiter = new RateLimiter(config.retries);\n\n  return async (req: Request, res: Response, next: NextFn) => {\n    const startTime = performance.now();\n    logger.info(`${req.method} ${req.path}`);\n\n    try {\n      await limiter.check(req.ip);\n      await next();\n    } catch (err) {\n      if (err instanceof RateLimitError) {\n        res.status(429).json({ error: "Too many requests" });\n      } else {\n        res.status(500).json({ error: "Internal server error" });\n      }\n    } finally {\n      const duration = performance.now() - startTime;\n      logger.info(`Completed in ${duration.toFixed(1)}ms`);\n    }\n  };\n}',
+];
+
+/**
+ * Generate a raw markdown string containing a prose intro and a fenced
+ * TypeScript code block of approximately `lineCount` lines.
+ * Returns raw markdown suitable for markdownToElements().
+ */
+export function generateCodeResponse(lineCount: number): string {
+  const intro = `Here's the implementation. I've added proper error handling, connection pooling, and retry logic as discussed.\n\nThe key changes are in the middleware chain and the event processor:\n`;
+
+  const codeLines: string[] = [];
+  let fragIdx = 0;
+  while (codeLines.length < lineCount) {
+    const fragment = CODE_FRAGMENTS[fragIdx % CODE_FRAGMENTS.length]!;
+    const lines = fragment.split('\n');
+    if (codeLines.length > 0) codeLines.push('');
+    codeLines.push(...lines);
+    fragIdx++;
+  }
+  // Trim to requested size
+  codeLines.length = Math.min(codeLines.length, lineCount);
+
+  return `${intro}\n\`\`\`typescript\n${codeLines.join('\n')}\n\`\`\`\n\nThis should resolve the timeout issues you were seeing in production.`;
+}
+
+export const TOOL_CALL_MESSAGES = [
+  'Running: `npm test -- --coverage`',
+  'Running: `tsc --noEmit`',
+  'Running: `eslint src/ --fix`',
+  'Running: `git diff HEAD~1 --stat`',
+  'Running: `node scripts/migrate.js`',
+  'Running: `docker compose up -d`',
+  'Running: `curl -s localhost:3000/health`',
+  'Running: `psql -c "SELECT count(*) FROM sessions"`',
+  'Running: `npm run build`',
+  'Running: `kubectl rollout status deploy/api`',
+];
+
+export const TOOL_RESULT_TEMPLATE = `PASS src/core/reconciler.test.ts
+  ✓ creates root node (3ms)
+  ✓ appends child correctly (1ms)
+  ✓ removes child without orphan (2ms)
+  ✓ handles text content update (1ms)
+PASS src/core/paint.test.ts
+  ✓ paints empty tree (1ms)
+  ✓ paints text node with style (4ms)
+  ✓ blits unchanged subtree (2ms)
+  ✓ handles wide characters (3ms)
+  ✓ continuation cells are correct (1ms)
+PASS src/core/emit.test.ts
+  ✓ diffs identical buffers (0ms)
+  ✓ diffs single cell change (1ms)
+  ✓ serializes full viewport (2ms)
+  ✓ handles style transitions (1ms)
+PASS src/core/layout.test.ts
+  ✓ wraps text at boundary (1ms)
+  ✓ wraps segments preserving style (2ms)
+  ✓ truncates with ellipsis (1ms)
+  ✓ handles zero-width chars (1ms)
+PASS src/core/cell-buffer.test.ts
+  ✓ creates buffer with correct dimensions (0ms)
+  ✓ writes and reads cells (1ms)
+  ✓ blit region copies correctly (2ms)
+  ✓ viewport slice is zero-copy (0ms)
+  ✓ expand damage for shrink (1ms)
+  ✓ resize buffer reuses backing (1ms)
+
+Test Suites: 5 passed, 5 total
+Tests:       23 passed, 23 total
+Snapshots:   0 total
+Time:        1.847s
+Ran all test suites.
+------------|---------|----------|---------|---------|
+File        | % Stmts | % Branch | % Funcs | % Lines |
+------------|---------|----------|---------|---------|
+All files   |   89.12 |    78.45 |   91.30 |   88.76 |
+ cell.ts    |   100.0 |    100.0 |   100.0 |   100.0 |
+ emit.ts    |    92.3 |     84.6 |    90.0 |    91.8 |
+ layout.ts  |    87.5 |     73.3 |    88.9 |    87.1 |
+ nodes.ts   |    95.0 |     90.0 |   100.0 |    94.7 |
+ paint.ts   |    84.2 |     71.4 |    85.7 |    83.6 |
+ reconciler |    85.7 |     66.7 |    90.9 |    85.0 |
+------------|---------|----------|---------|---------|`;
+
+/**
+ * Generate tool result output of approximately `lineCount` lines by
+ * repeating/trimming the template.
+ */
+export function generateToolResult(lineCount: number): string {
+  const templateLines = TOOL_RESULT_TEMPLATE.split('\n');
+  const result: string[] = [];
+  while (result.length < lineCount) {
+    result.push(...templateLines);
+  }
+  result.length = Math.min(result.length, lineCount);
+  return result.join('\n');
 }

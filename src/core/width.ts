@@ -134,6 +134,15 @@ export function isRegionalIndicator(cp: number): boolean {
   return cp >= 0x1f1e6 && cp <= 0x1f1ff;
 }
 
+/** Memoization cache for stringDisplayWidth. */
+const WIDTH_MEMO_CAP = 8192;
+const _widthMemo: Map<string, number> = new Map();
+
+/** Clear the stringDisplayWidth memo cache. */
+export function clearWidthMemo(): void {
+  _widthMemo.clear();
+}
+
 /**
  * Return the total display width of a string in terminal columns.
  * Iterates by code point (handles surrogate pairs correctly).
@@ -142,6 +151,10 @@ export function isRegionalIndicator(cp: number): boolean {
  * regional indicator pairs are rendered as single glyphs by modern terminals.
  */
 export function stringDisplayWidth(str: string): number {
+  if (str.length >= 2) {
+    const cached = _widthMemo.get(str);
+    if (cached !== undefined) return cached;
+  }
   let width = 0;
   let prevCp = -1;
   let prevWasZWJ = false;
@@ -182,6 +195,10 @@ export function stringDisplayWidth(str: string): number {
     prevWasZWJ = cp === 0x200d;
     prevWasRI = isRegionalIndicator(cp);
     prevCp = cp;
+  }
+  if (str.length >= 2) {
+    if (_widthMemo.size >= WIDTH_MEMO_CAP) _widthMemo.clear();
+    _widthMemo.set(str, width);
   }
   return width;
 }

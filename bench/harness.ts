@@ -27,16 +27,34 @@ export function computeStats(values: number[]): Stats {
   const sum = sorted.reduce((s, v) => s + v, 0);
   const mean = sum / sorted.length;
 
-  const variance = sorted.reduce((s, v) => s + (v - mean) ** 2, 0) / sorted.length;
+  const n = sorted.length;
+  const variance = sorted.reduce((s, v) => s + (v - mean) ** 2, 0) / (n > 1 ? n - 1 : n);
   const stddev = Math.sqrt(variance);
+
+  // Interpolated median
+  const mid = (n - 1) / 2;
+  const lo = Math.floor(mid);
+  const hi = Math.ceil(mid);
+  const median = lo === hi ? sorted[lo]! : (sorted[lo]! + sorted[hi]!) / 2;
+
+  // Interpolated percentiles
+  const p95idx = (n - 1) * 0.95;
+  const p95lo = Math.floor(p95idx);
+  const p95frac = p95idx - p95lo;
+  const p95 = sorted[p95lo]! + p95frac * ((sorted[Math.ceil(p95idx)] ?? sorted[p95lo]!) - sorted[p95lo]!);
+
+  const p99idx = (n - 1) * 0.99;
+  const p99lo = Math.floor(p99idx);
+  const p99frac = p99idx - p99lo;
+  const p99 = sorted[p99lo]! + p99frac * ((sorted[Math.ceil(p99idx)] ?? sorted[p99lo]!) - sorted[p99lo]!);
 
   return {
     min: sorted[0]!,
-    max: sorted[sorted.length - 1]!,
+    max: sorted[n - 1]!,
     mean,
-    median: sorted[Math.floor(sorted.length / 2)]!,
-    p95: sorted[Math.floor(sorted.length * 0.95)]!,
-    p99: sorted[Math.floor(sorted.length * 0.99)]!,
+    median,
+    p95,
+    p99,
     stddev,
   };
 }
@@ -51,6 +69,11 @@ export function measure(
 ): number[] {
   for (let i = 0; i < warmup; i++) {
     fn();
+  }
+
+  // Force GC to reduce noise in measurements
+  if (typeof globalThis.gc === 'function') {
+    globalThis.gc();
   }
 
   const latencies: number[] = [];
@@ -72,6 +95,11 @@ export async function measureAsync(
 ): Promise<number[]> {
   for (let i = 0; i < warmup; i++) {
     await fn();
+  }
+
+  // Force GC to reduce noise in measurements
+  if (typeof globalThis.gc === 'function') {
+    globalThis.gc();
   }
 
   const latencies: number[] = [];

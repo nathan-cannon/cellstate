@@ -4,12 +4,13 @@
  * actual component functions, similar to how React DOM handles 'div'/'span'.
  */
 import React from 'react';
-import type { BoxProps, TextProps } from './jsx.js';
+import type { BoxProps, TextProps, RawAnsiProps } from './jsx.js';
 
 export const Box = 'box' as unknown as React.FC<BoxProps>;
 export const Text = 'text' as unknown as React.FC<TextProps>;
 export const Divider = 'divider' as any;
-export type { BoxProps, TextProps };
+export const RawAnsi = 'raw-ansi' as unknown as React.FC<RawAnsiProps>;
+export type { BoxProps, TextProps, RawAnsiProps };
 
 export { useApp } from '../hooks/app-context.js';
 export { useFocus } from '../hooks/use-focus.js';

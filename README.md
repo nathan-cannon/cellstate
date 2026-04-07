@@ -8,39 +8,18 @@
   <a href="https://github.com/nathan-cannon/cellstate/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue" alt="License: MIT"></a>
 </p>
 
-<p align="center"><em>Inspired by <a href="https://github.com/anthropics/claude-code/issues/769#issuecomment-3667315590">this comment on terminal rendering</a> from the Claude Code team.</em></p>
-
----
-
-<p align="center"><img src="demo.gif" alt="CellState demo"></p>
-
-<p align="center"><em>CellState rendering a coding agent UI via OpenCode's serve API</em></p>
-
----
-
-## How it works
-
-React reconciler → layout → rasterize to cell grid → extract viewport → cell-level diff → minimal ANSI escape sequences.
-
-Every frame renders the full content tree into an offscreen buffer. The viewport is extracted based on scroll position, then compared cell by cell against the previous frame. Only differences are written. Unchanged rows are skipped entirely. Within changed rows, SGR state tracking minimizes style changes: switching from bold red to bold blue emits one color change, not a full reset.
-
-CJK characters, emoji, and fullwidth Unicode are handled natively. The layout engine, rasterizer, and diff engine all operate on display width (terminal columns), not string length. Wide characters occupy two cells with proper continuation markers. Variation Selector 16 sequences (e.g. ☀️) are detected and widened correctly. Width tables are generated from Unicode 17.0 emoji data.
-
-Every frame is wrapped in DEC 2026 synchronized output sequences so terminals that support it paint atomically with zero tearing. Terminals without support silently ignore the sequences. Supported terminals: https://github.com/contour-terminal/vt-extensions/blob/master/synchronized-output.md
-
-Tested with 4,300+ property-based test iterations against xterm.js. 1,004 tests across the full rendering pipeline, verified against 6 terminals: Windows Terminal, kitty, Ghostty, iTerm2, macOS Terminal.app, and xterm.js.
-
-
-## Performance
-
-Benchmarked against Ink and raw escape codes. Full methodology and code: [tui-benchmarks](https://github.com/nathan-cannon/tui-benchmarks)
-
-| Messages | Content | CellState Pipeline | Raw    | Ink     |
-|----------|---------|--------------------|--------|---------|
-| 100      | 13.3 KB | 1.10ms             | 1.10ms | 26.53ms |
-| 250      | 33.1 KB | 2.54ms             | 2.44ms | 36.93ms |
-| 500      | 66.0 KB | 5.10ms             | 4.81ms | 63.05ms |
-
+## Overview
+ 
+CellState renders into the main terminal buffer with no alternate screen. Content scrolls naturally, persists after exit, and works with native terminal features like search, text selection, copy/paste, and scrollback.
+ 
+The tradeoff is that the renderer can't clear and redraw the screen on every frame. Once content scrolls into the terminal's scrollback buffer, it becomes unreachable. CellState handles this by tracking which cells are in the viewport and which have moved into scrollback, diffing only what's visible, and falling back to a full redraw only when necessary.
+ 
+Rendering cost scales with what changed, not total content size. When a single component updates in a 250-message conversation, the paint system blits unchanged subtrees from the previous frame and only repaints the dirty region. This brings paint time from 3.4ms (full repaint) down to 0.47ms. The diff engine then compares only damaged cells within the viewport, so emission cost stays flat regardless of conversation length. During streaming with markdown and syntax-highlighted code blocks, median frame time at 100 messages is 4ms, well under a 16ms frame budget. Frame coalescing merges rapid React commits into a single rendered frame, and backpressure handling defers frames when stdout can't keep up, preventing unbounded memory growth during fast updates.
+ 
+CellState detects terminal capabilities at startup and adapts its output accordingly. Synchronized output (DEC 2026) is enabled on terminals that support it, including iTerm2, Ghostty, kitty, WezTerm, Alacritty, Windows Terminal, and VTE-based terminals like GNOME Terminal. OSC 8 hyperlinks are emitted when the terminal supports them, with correct grouping across wrapped lines. On Windows, the clear sequence adapts between modern Windows Terminal and legacy conhost. Piped output (non-TTY) skips all cursor movement and emits plain styled text. The process recovers cleanly from Ctrl+Z suspension.
+ 
+Unicode handling covers CJK characters, emoji, grapheme clusters, ZWJ sequences, skin tone modifiers, flag sequences, and Variation Selector 16 upgrades. Display width tables are generated from Unicode 17.0 data. The layout engine, paint system, and diff engine all operate on terminal column widths, not string lengths.
+ 
 
 ## Install
 ```
@@ -90,17 +69,18 @@ await app.waitUntilExit();
     - [useFocusManager](#usefocusmanager)
     - [useDimensions](#usedimensions)
   - [Utilities](#utilities)
-    - [markdownToElements](#markdowntoelements)
-    - [highlightCode](#highlightcode)
+    - [renderOnce](#renderonce)
+    - [`<Markdown>`](#markdown)
+    - [`<StreamingMarkdown>`](#streamingmarkdown)
     - [measureElement](#measureelement)
     - [decodeKeypress](#decodekeypress)
     - [Display Width](#display-width)
 
 
 ## Getting Started
-CellState uses its own Flexbox layout engine for the terminal, allowing you to build user interfaces for your CLIs using familiar CSS-like properties. `<Box>` is your layout container (like `<div>` with `display: flex`), `<Text>` renders styled text. State changes via hooks trigger re-renders automatically.
+CellState uses Yoga to create Flexbox layouts in the terminal, allowing you to build user interfaces for your CLIs using familiar CSS-like properties. `<Box>` is your layout container (like `<div>` with `display: flex`), `<Text>` renders styled text. State changes via hooks trigger re-renders automatically.
 
-All visible text must be inside a `<Text>` component. You can use plain string children or structured segments for mixed styles. The built-in markdown renderer (powered by remark with syntax-highlighted code blocks via Shiki) produces `<Box>` and `<Text>` trees for you.
+All visible text must be inside a `<Text>` component. You can use plain string children or structured segments for mixed styles. The built-in `<Markdown>` and `<StreamingMarkdown>` components parse markdown via remark, syntax-highlight code blocks via tree-sitter, and render through the `<RawAnsi>` fast path, bypassing React reconciliation and Yoga layout for the markdown content.
 
 ## App Lifecycle
 
@@ -110,7 +90,7 @@ An app using CellState stays alive until you call `unmount()`. You don't need to
 
 A single call sets up the full terminal pipeline:
 
-1. Creates the frame loop (reconciler → layout → rasterize → diff → stdout)
+1. Creates the frame loop (reconciler → layout → paint → damage-scoped diff → emit → stdout)
 2. Hides the cursor
 3. Puts stdin in raw mode for keypress handling
 4. Redirects `console.log`/`info`/`warn`/`error`/`debug` to stderr (enabled by default, disable with `patchConsole: false`)
@@ -132,13 +112,13 @@ const app = render(<App />, { stdout: myStream, stdin: myInputStream });
 interface RenderInstance {
   unmount: () => void;                     // Stop rendering, restore terminal state
   waitUntilExit: () => Promise<unknown>;   // Resolves when unmount() is called
-  dumpFrameLog: (path: string) => void;    // Write last 20 frames to file (debugging)
+  dumpFrameLog: (path: string) => void;    // Write frame state snapshot to file (debugging)
 }
 ```
 
 `unmount()` is idempotent and safe to call multiple times. It restores raw mode, re-shows the cursor, stops the frame loop, restores original console methods, and cleans up all listeners. If your component tree throws during a render, the error boundary calls `unmount()` automatically and prints the error to stderr.
 
-`dumpFrameLog(path)` writes the last 20 frames to a JSON file for debugging rendering issues. Each entry includes frame type, content height, scrollback state, and viewport dimensions.
+`dumpFrameLog(path)` writes the current frame state to a JSON file for debugging rendering issues. Includes viewport dimensions, scrollback state, buffer sizes, and interning table sizes.
 
 ### Waiting for Exit
 
@@ -162,52 +142,31 @@ import { createFrameLoop } from 'cellstate';
 const loop = createFrameLoop(process.stdout);
 loop.start(<App />);
 loop.update(<App newProps={...} />);
-loop.getGrid();  // Current rendered grid (for testing or screenshots)
+loop.getBuffer();      // Current packed cell buffer
+loop.getCharTable();   // Character interning table
+loop.getStyleTable();  // Style interning table
+loop.getLinkTable();   // Hyperlink interning table
+loop.perfSnapshot();   // Performance counters (when perf: true)
 loop.stop();
 ```
 
 This is what `render()` uses internally. You get full control over the lifecycle but are responsible for raw mode, cursor visibility, and cleanup yourself.
 
-### Static Rendering
+**Options:**
 
-`renderOnce` runs the full rendering pipeline (reconciler, layout, rasterize, serialize) and returns a styled ANSI string. No frame loop, no raw mode, no cursor management, no stdin. The caller decides where to write the output.
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `perf` | `boolean` | `false` | Enable in-memory performance instrumentation |
+| `immediateMode` | `boolean` | `false` | Bypass frame coalescing; every React commit renders synchronously. Useful for tests |
+| `capabilities` | `Partial<TerminalCapabilities>` | auto-detected | Override detected terminal capabilities (e.g. `synchronizedOutput`) |
 
+Enable performance instrumentation to see incremental paint stats, frame classification counters, and pipeline timings:
 ```tsx
-import { renderOnce, Box, Text } from 'cellstate';
-
-const output = await renderOnce(
-  <Box gap={1}>
-    <Text segments={[{ text: 'Error: ', style: { bold: true, color: '#ff0000' } }]} />
-    <Text>File not found</Text>
-  </Box>
-);
-
-process.stdout.write(output + '\n');
-```
-
-Render markdown to the terminal:
-
-```tsx
-import { renderOnce, markdownToElements } from 'cellstate';
-
-const markdown = '# Hello\n\nSome **bold** text and `inline code`.';
-const output = await renderOnce(<>{markdownToElements(markdown)}</>);
-process.stdout.write(output + '\n');
-```
-
-Custom column width (defaults to terminal width, or 80 if unavailable):
-
-```tsx
-const output = await renderOnce(<MyComponent />, { columns: 60 });
-```
-
-Testing component output:
-
-```tsx
-test('renders greeting', async () => {
-  const output = await renderOnce(<Greeting name="World" />);
-  expect(output).toContain('Hello, World');
-});
+const loop = createFrameLoop(process.stdout, { perf: true });
+// ... after some frames ...
+const snap = loop.perfSnapshot();
+console.log(snap.counts.subtreeBlits);    // subtrees blitted from front buffer
+console.log(snap.counts.subtreesPainted); // subtrees repainted fresh
 ```
 
 
@@ -234,8 +193,8 @@ Renders styled text with automatic line wrapping.
 | `strikethrough`   | `boolean`   | Strikethrough text                                        |
 | `dim`             | `boolean`   | Dimmed/faint text                                         |
 | `inverse`         | `boolean`   | Swap foreground and background colors                     |
-| `color`           | `string`    | Text color (hex like `#ff0000` or named: `red`, `green`, `blue`, `yellow`, `cyan`, `magenta`, `white`, `gray`) |
-| `backgroundColor` | `string`    | Background color (hex or named color)                     |
+| `color`           | `string`    | Foreground color (`#RRGGBB` hex). Also available as `fg`  |
+| `backgroundColor` | `string`    | Background color (`#RRGGBB` hex)                          |
 | `hangingIndent`   | `number`    | Indent for wrapped continuation lines                     |
 | `wrap`            | `string`    | Text overflow: `'wrap'` (default), `'truncate'`, `'truncate-start'`, `'truncate-middle'` |
 | `segments`        | `Segment[]` | Multiple styled sections in one text element              |
@@ -266,7 +225,7 @@ For mixed styles in a single element, use segments:
 ]} />
 ```
 
-Segment styles support: `bold`, `italic`, `underline`, `strikethrough`, `dim`, `inverse`, `color`, and `backgroundColor`. This is what markdownToElements and syntax highlighting produce internally.
+Segment styles support: `bold`, `italic`, `underline`, `strikethrough`, `dim`, `inverse`, `color`, and `backgroundColor`.
 
 
 ### `<Box>`
@@ -294,24 +253,49 @@ Container element for layout. Stack children vertically or horizontally.
 | `display`         | `'flex' \| 'none'`                                    | Hide component and children (default: `flex`)        |
 | `flexDirection`   | `'column' \| 'row'`                                   | Stack direction (default: `column`)                  |
 | `gap`             | `number`                                               | Space between children                               |
+| `columnGap`       | `number`                                               | Gap between columns (overrides `gap` for horizontal axis) |
+| `rowGap`          | `number`                                               | Gap between rows (overrides `gap` for vertical axis) |
 | `width`           | `number`                                               | Fixed width in columns                               |
-| `height`          | `number`                                               | Fixed height in rows. Children are positioned from the top; the box height is fixed regardless of content size |
-| `flexGrow`        | `number`                                               | Fill remaining space in row layout                   |
+| `height`          | `number`                                               | Fixed height in rows                                 |
+| `widthPercent`    | `number`                                               | Width as percentage of parent (0-100)                |
+| `heightPercent`   | `number`                                               | Height as percentage of parent (0-100)               |
+| `minWidth`        | `number`                                               | Minimum width in columns                             |
+| `maxWidth`        | `number`                                               | Maximum width in columns                             |
+| `minHeight`       | `number`                                               | Minimum height in rows                               |
+| `maxHeight`       | `number`                                               | Maximum height in rows                               |
+| `flexGrow`        | `number \| boolean`                                    | Fill remaining space in row layout                   |
+| `flexShrink`      | `number`                                               | How much this child should shrink relative to siblings (default: `0`) |
+| `flexBasis`       | `number \| string`                                     | Initial main-axis size before flex grow/shrink       |
+| `flexWrap`        | `'nowrap' \| 'wrap' \| 'wrap-reverse'`                 | Allow children to wrap to the next line (default: `nowrap`) |
 | `alignItems`      | `'stretch' \| 'flex-start' \| 'center' \| 'flex-end'` | Cross-axis alignment (default: `stretch`)            |
-| `justifyContent`  | `'flex-start' \| 'center' \| 'flex-end' \| 'space-between' \| 'space-around' \| 'space-evenly'` | Main-axis distribution of children (default: `flex-start`). Only effective when the container has extra space (e.g. fixed `height`) |
+| `alignSelf`       | `'auto' \| 'stretch' \| 'flex-start' \| 'center' \| 'flex-end'` | Override parent's `alignItems` for this child |
+| `alignContent`    | `'stretch' \| 'flex-start' \| 'center' \| 'flex-end' \| 'space-between' \| 'space-around' \| 'space-evenly'` | Cross-axis distribution of wrapped lines |
+| `justifyContent`  | `'flex-start' \| 'center' \| 'flex-end' \| 'space-between' \| 'space-around' \| 'space-evenly'` | Main-axis distribution of children (default: `flex-start`) |
 | `padding`         | `number`                                               | Padding on all sides                                 |
+| `paddingX`        | `number`                                               | Shorthand for `paddingLeft` + `paddingRight`         |
+| `paddingY`        | `number`                                               | Shorthand for `paddingTop` + `paddingBottom`         |
 | `paddingLeft`     | `number`                                               | Left padding                                         |
 | `paddingRight`    | `number`                                               | Right padding                                        |
 | `paddingTop`      | `number`                                               | Top padding                                          |
 | `paddingBottom`   | `number`                                               | Bottom padding                                       |
 | `margin`          | `number`                                               | Margin on all sides                                  |
+| `marginX`         | `number`                                               | Shorthand for `marginLeft` + `marginRight`           |
+| `marginY`         | `number`                                               | Shorthand for `marginTop` + `marginBottom`           |
 | `marginLeft`      | `number`                                               | Left margin                                          |
 | `marginRight`     | `number`                                               | Right margin                                         |
 | `marginTop`       | `number`                                               | Top margin                                           |
 | `marginBottom`    | `number`                                               | Bottom margin                                        |
 | `borderStyle`     | `'single' \| 'double' \| 'round' \| 'bold'`           | Box border style                                     |
-| `borderColor`     | `string`                                               | Border color (hex or named color)                    |
-| `backgroundColor` | `string`                                               | Background fill color (hex or named color)           |
+| `borderColor`     | `string`                                               | Border color (`#RRGGBB` hex)                         |
+| `color`           | `string`                                               | Foreground color for text children (`#RRGGBB` hex)   |
+| `backgroundColor` | `string`                                               | Background fill color (`#RRGGBB` hex)                |
+| `position`        | `'relative' \| 'absolute'`                             | Positioning mode (default: `relative`)               |
+| `top`             | `number`                                               | Offset from top when `position='absolute'`           |
+| `left`            | `number`                                               | Offset from left when `position='absolute'`          |
+| `right`           | `number`                                               | Offset from right when `position='absolute'`         |
+| `bottom`          | `number`                                               | Offset from bottom when `position='absolute'`        |
+| `overflow`        | `'visible' \| 'hidden'`                                | Content overflow behavior (default: `visible`)       |
+| `aspectRatio`     | `number`                                               | Width-to-height ratio (e.g. `2` means width is 2x height) |
 
 Use `display="none"` to hide a component without unmounting it. The component stays in the React tree (state is preserved) but produces no visual output and takes no space in the layout. This is different from `{condition && <Component />}`, which unmounts the component and destroys its state.
 
@@ -339,7 +323,7 @@ Custom character and color:
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `char` | `string` | `'─'` | Character to repeat across the line |
-| `color` | `string` | inherited | Line color (hex or named color) |
+| `color` | `string` | inherited | Line color (`#RRGGBB` hex) |
 | `dim` | `boolean` | `false` | Dimmed/faint line |
 
 #### Examples:
@@ -576,44 +560,83 @@ Most components don't need this since the layout engine handles sizing automatic
 
 ## Utilities
 
-### `markdownToElements`
+### `renderOnce`
 
-Render markdown strings directly as terminal UI:
+Runs the full rendering pipeline (reconciler, layout, rasterize, serialize) and returns a styled ANSI string. No frame loop, no raw mode, no cursor management, no stdin. The caller decides where to write the output.
 
 ```tsx
-import { markdownToElements } from 'cellstate';
+import { renderOnce, Box, Text } from 'cellstate';
+
+const output = await renderOnce(
+  <Box gap={1}>
+    <Text segments={[{ text: 'Error: ', style: { bold: true, color: '#ff0000' } }]} />
+    <Text>File not found</Text>
+  </Box>
+);
+
+process.stdout.write(output + '\n');
+```
+
+Render markdown to the terminal:
+
+```tsx
+import { renderOnce, Markdown } from 'cellstate';
+
+const markdown = '# Hello\n\nSome **bold** text and `inline code`.';
+const output = await renderOnce(<Markdown>{markdown}</Markdown>);
+process.stdout.write(output + '\n');
+```
+
+Custom column width (defaults to terminal width, or 80 if unavailable):
+
+```tsx
+const output = await renderOnce(<MyComponent />, { columns: 60 });
+```
+
+Testing component output:
+
+```tsx
+test('renders greeting', async () => {
+  const output = await renderOnce(<Greeting name="World" />);
+  expect(output).toContain('Hello, World');
+});
+```
+
+### `<Markdown>`
+
+Renders markdown content through the remark + raw-ansi pipeline. Parses markdown, syntax-highlights code blocks via tree-sitter, generates ANSI strings, and renders through `<RawAnsi>`, bypassing React reconciliation and Yoga layout for the markdown content.
+
+```tsx
+import { Markdown } from 'cellstate';
 
 function Response({ content }: { content: string }) {
-  return <>{markdownToElements(content)}</>;
+  return <Markdown>{content}</Markdown>;
 }
 ```
 
-Supports headings, bold, italic, inline code, fenced code blocks with syntax highlighting (via Shiki), lists (ordered and unordered), blockquotes, links, and thematic breaks.
+**Props:**
 
-### `highlightCode`
+| Property   | Type      | Default | Description |
+|------------|-----------|---------|-------------|
+| `children` | `string`  | -       | Markdown text to render |
+| `visible`  | `boolean` | `true`  | When `false`, processes incrementally (warms cache) but doesn't render |
+| `width`    | `number`  | terminal width | Override column width for wrapping |
 
-Syntax-highlight a code string into styled segments (powered by Shiki, Nord theme):
+Supports headings, bold, italic, inline code, fenced code blocks with syntax highlighting, lists (ordered and unordered), blockquotes, links, tables, and thematic breaks.
+
+Code blocks are highlighted via tree-sitter with the Nord theme. Supported languages: TypeScript, TSX, JavaScript, Python, Bash, JSON, Go, Rust, HTML, CSS, YAML, C, C++, Java, Ruby, PHP, Swift, Kotlin, Scala, Lua, R, TOML, SQL, Markdown.
+
+### `<StreamingMarkdown>`
+
+Designed for streaming LLM responses where content grows token by token. Splits content at the last block boundary: the stable prefix is memoized (all cache hits), only the growing tail is re-parsed each frame.
 
 ```tsx
-import { highlightCode, Text, Box } from 'cellstate';
+import { StreamingMarkdown } from 'cellstate';
 
-function CodeBlock({ code, lang }: { code: string; lang: string }) {
-  const lines = highlightCode(code, lang);
-  if (!lines) return <Text segments={[{ text: code }]} />;
-
-  return (
-    <Box paddingLeft={2}>
-      {lines.map((segments, i) => (
-        <Text key={i} segments={segments} />
-      ))}
-    </Box>
-  );
+function StreamingResponse({ content }: { content: string }) {
+  return <StreamingMarkdown>{content}</StreamingMarkdown>;
 }
 ```
-
-Returns an array of lines, each containing an array of `Segment` objects with syntax-highlighted colors. Returns `null` for unrecognized languages.
-
-Supported languages: TypeScript, TSX, JavaScript, JSX, Bash (sh/shell), JSON, YAML, HTML, CSS, Go, Rust, Python.
 
 ### `measureElement`
 
@@ -680,7 +703,7 @@ charDisplayWidth(0x1F680);       // 2  (rocket emoji)
 charDisplayWidth(0x0301);        // 0  (combining acute accent)
 charDisplayWidth(0x61);          // 1  (ASCII 'a')
 
-sliceToWidth('你好世界', 5);      // '你好'  (4 cols — next char would exceed 5)
+sliceToWidth('你好世界', 5);      // '你好'  (4 cols, next char would exceed 5)
 sliceFromEndToWidth('你好世界', 5); // '世界'  (4 cols from the end)
 ```
 
@@ -690,3 +713,4 @@ sliceFromEndToWidth('你好世界', 5); // '世界'  (4 cols from the end)
 | `charDisplayWidth(codePoint)` | Display width of a single Unicode code point (0, 1, or 2) |
 | `sliceToWidth(text, maxCols)` | Slice from the start to fit within `maxCols` columns. Never splits wide characters or surrogate pairs |
 | `sliceFromEndToWidth(text, maxCols)` | Slice from the end to fit within `maxCols` columns |
+

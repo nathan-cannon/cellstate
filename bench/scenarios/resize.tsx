@@ -1,14 +1,18 @@
 /**
- * Resize benchmark: worst-case operation (full re-layout + rasterize + redraw).
+ * Resize benchmark: worst-case operation (full re-layout + paint + full-redraw).
  * Simulates 120x40 to 80x24 at various content sizes.
  */
-import React, { useState, useLayoutEffect } from 'react';
+import React from 'react';
 import { performance } from 'node:perf_hooks';
 import { Box, Text } from '../../src/components/elements.js';
-import { mountRoot } from '../../src/core/reconciler.js';
-import { layout, contentHeight } from '../../src/core/layout.js';
-import { rasterize } from '../../src/core/rasterizer.js';
-import { fullRedraw, extractViewport, lastContentRow } from '../../src/core/diff.js';
+import { mountRoot, setFlexNodeFactory } from '../../src/core/reconciler.js';
+import { createFlexNodeFactory } from '../../src/layout/yoga-flex.js';
+import { paintTree } from '../../src/core/paint.js';
+import { createCellBuffer, viewportSlice, type CellBuffer } from '../../src/core/cell-buffer.js';
+import { serializeAll } from '../../src/core/emit.js';
+import { CharTable } from '../../src/core/char-table.js';
+import { StyleTable } from '../../src/core/style-table.js';
+import { LinkTable } from '../../src/core/link-table.js';
 import type { TNode } from '../../src/core/nodes.js';
 import {
   getMessageBody,
@@ -50,18 +54,32 @@ function ChatUI({ messageCount }: { messageCount: number }) {
 }
 
 /**
- * Simulate a resize frame: clearLayout → full re-layout at new dimensions →
- * full rasterize → full redraw. This is the maximum-cost operation.
+ * Simulate a resize frame: full re-layout at new dimensions →
+ * paintTree → full-redraw emit.
+ *
+ * Resize changes dimensions, so paintTree detects movement during its walk
+ * and won't blit anything. We still pass the front buffer for API correctness
+ * and return the painted buffer.
  */
-function simulateResizeFrame(root: TNode, cols: number, rows: number): { output: string } {
-  layout(root, cols, rows);
-  const ch = contentHeight(root);
-  const fullGrid = rasterize(root, cols, Math.max(ch + 10, rows), 0);
-  const actualHeight = lastContentRow(fullGrid) + 1;
-  const scrollback = Math.max(0, actualHeight - rows);
-  const viewportGrid = extractViewport(fullGrid, scrollback, rows);
-  const result = fullRedraw(viewportGrid, 0);
-  return { output: result.output };
+function simulateResizeFrame(
+  root: TNode,
+  cols: number,
+  rows: number,
+  frontBuf: CellBuffer | null,
+  charTable: CharTable,
+  styleTable: StyleTable,
+  linkTable: LinkTable,
+): { backBuf: CellBuffer; output: string } {
+  root.flexNode!.setWidth(cols);
+  root.flexNode!.calculateLayout(cols);
+  const ch = root.flexNode!.getComputedHeight();
+  const bufHeight = Math.max(ch, rows);
+  const backBuf = createCellBuffer(cols, bufHeight);
+  paintTree(root, backBuf, frontBuf, charTable, styleTable, linkTable, 0);
+  const backStart = Math.max(0, backBuf.height - rows);
+  const backVp = viewportSlice(backBuf, backStart, rows);
+  const result = serializeAll(backVp, styleTable, charTable, linkTable, false);
+  return { backBuf, output: result.output };
 }
 
 let latestRoot: TNode | null = null;
@@ -92,16 +110,22 @@ export async function runResize(): Promise<void> {
     latestRoot = null;
     rootResolve = null;
 
+    const charTable = new CharTable();
+    const styleTable = new StyleTable();
+    const linkTable = new LinkTable();
+
+    setFlexNodeFactory(createFlexNodeFactory());
     mountRoot(<ChatUI messageCount={msgCount} />, onFrame);
     const root = await waitForCommit();
 
     // Initial frame at original dimensions
-    simulateResizeFrame(root, INITIAL_COLS, INITIAL_ROWS);
+    let { backBuf: frontBuf } = simulateResizeFrame(root, INITIAL_COLS, INITIAL_ROWS, null, charTable, styleTable, linkTable);
 
     // Warmup resize cycles
     for (let i = 0; i < WARMUP; i++) {
-      simulateResizeFrame(root, RESIZE_COLS, RESIZE_ROWS);
-      simulateResizeFrame(root, INITIAL_COLS, INITIAL_ROWS);
+      const r1 = simulateResizeFrame(root, RESIZE_COLS, RESIZE_ROWS, frontBuf, charTable, styleTable, linkTable);
+      const r2 = simulateResizeFrame(root, INITIAL_COLS, INITIAL_ROWS, r1.backBuf, charTable, styleTable, linkTable);
+      frontBuf = r2.backBuf;
     }
 
     // Measure resize from 120×40 → 80×24
@@ -109,12 +133,13 @@ export async function runResize(): Promise<void> {
     const resizeBytes: number[] = [];
     for (let i = 0; i < ITERATIONS; i++) {
       // Reset to original dimensions
-      simulateResizeFrame(root, INITIAL_COLS, INITIAL_ROWS);
+      const reset = simulateResizeFrame(root, INITIAL_COLS, INITIAL_ROWS, frontBuf, charTable, styleTable, linkTable);
 
       const t0 = performance.now();
-      const { output } = simulateResizeFrame(root, RESIZE_COLS, RESIZE_ROWS);
+      const { backBuf, output } = simulateResizeFrame(root, RESIZE_COLS, RESIZE_ROWS, reset.backBuf, charTable, styleTable, linkTable);
       const t1 = performance.now();
 
+      frontBuf = backBuf;
       resizeLatencies.push(t1 - t0);
       resizeBytes.push(output.length);
     }

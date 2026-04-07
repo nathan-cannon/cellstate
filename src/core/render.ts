@@ -114,6 +114,19 @@ export function render(
     ),
   );
 
+  // Restore raw mode and bracketed paste after suspend/resume (Ctrl+Z → fg).
+  // Some platforms reset terminal modes on SIGTSTP; re-apply them on SIGCONT.
+  // Registered BEFORE loop.start() so it fires before frame-loop's SIGCONT
+  // handler — raw mode must be restored before processFrame writes to stdout.
+  const sigcontHandler = process.platform !== 'win32' ? () => {
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdout.write('\x1b[?2004h'); // re-enable bracketed paste
+  } : null;
+  if (sigcontHandler) {
+    process.on('SIGCONT', sigcontHandler);
+  }
+
   // Start frame loop (cursor hide, reconciler mount, drain/resize listeners)
   loop.start(wrapped);
 
@@ -151,6 +164,9 @@ export function render(
     unmounted = true;
 
     clearInterval(keepAlive);
+    if (sigcontHandler) {
+      process.off('SIGCONT', sigcontHandler);
+    }
     unpatchConsole?.();
     focusCleanup();
     stdin.setRawMode(false);

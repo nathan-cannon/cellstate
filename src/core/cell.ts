@@ -61,6 +61,7 @@ function emptyCell(): Cell {
   };
 }
 
+/** @deprecated Use createCellBuffer() from cell-buffer.ts instead. Will be removed in the next major version. */
 export function createGrid(width: number, height: number, perf?: Perf): CellGrid {
   if (perf) {
     perf.timeStart('createGrid');
