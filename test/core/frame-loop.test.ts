@@ -365,9 +365,9 @@ describe('frame-loop — growth frames', () => {
 
     expect(loop.getScrollbackLines()).toBe(6);
 
-    // Output should contain line-erase sequences (\x1b[2K) from fullRedraw
+    // Output should contain \r\n row separators from fullRedraw
     const all = stdout.written.join('');
-    expect(all).toContain('\x1b[2K');
+    expect(all).toContain('\r\n');
 
     // Bar is present in the final viewport
     const grid = loop.getGrid();
@@ -582,11 +582,10 @@ describe('frame-loop — full redraw', () => {
       (chunk) => chunk !== '\x1b[?25l' && !chunk.includes('\x1b[?25h'),
     );
     expect(frameWrites.length).toBeGreaterThanOrEqual(1);
-    // First write contains the clear screen sequence
-    expect(frameWrites[0]!).toContain('\x1b[2J');
-    expect(frameWrites[0]!).toContain('\x1b[3J');
-    // Content appears in one of the writes (first or second depending on overflow)
+    // First frame uses inline rendering with \r\n separators (no clear screen)
     const allOutput = frameWrites.join('');
+    expect(allOutput).toContain('\r\n');
+    // Content appears in the output
     expect(allOutput).toContain('Line 0');
   });
 
@@ -629,10 +628,10 @@ describe('frame-loop — full redraw', () => {
     expect(loop.getScrollbackLines()).toBe(0);
 
     const all = stdout.written.join('');
-    // Should contain clear screen from the shrink
-    // (at least 2 clear screens: first frame + shrink)
+    // Should contain clear screen from the shrink (contaminated fallback).
+    // First frame uses inline rendering (no clear screen).
     const clearCount = all.split('\x1b[2J').length - 1;
-    expect(clearCount).toBeGreaterThanOrEqual(2);
+    expect(clearCount).toBeGreaterThanOrEqual(1);
 
     const grid = loop.getGrid();
     expect(grid).not.toBeNull();
@@ -682,9 +681,10 @@ describe('frame-loop — full redraw', () => {
     expect(loop.getScrollbackLines()).toBe(0);
 
     const all = stdout.written.join('');
-    // At least 2 clear screens: first frame + content-shrink full redraw
+    // At least 1 clear screen: content-shrink triggers contaminated fallback.
+    // First frame uses inline rendering (no clear screen).
     const clearCount = all.split('\x1b[2J').length - 1;
-    expect(clearCount).toBeGreaterThanOrEqual(2);
+    expect(clearCount).toBeGreaterThanOrEqual(1);
   });
 
   it('spinner disappearing — no full redraw when scrollback unchanged', async () => {
@@ -828,15 +828,8 @@ describe('frame-loop — status bar in content flow', () => {
 
     expect(loop.getScrollbackLines()).toBe(11);
 
-    // Growth frame is a single write. Verify the write contains 11 \n
-    // (one per scrolled row) and the final grid has STATUS at the bottom.
-    const frameWrites = stdout.written.filter(
-      (chunk) => chunk !== '\x1b[?25l' && !chunk.includes('\x1b[?25h'),
-    );
-    const growthWrite = frameWrites[0]!;
-    const newlineCount = (growthWrite.match(/\n/g) || []).length;
-    expect(newlineCount).toBe(11);
-
+    // In inline mode, scrollback is created naturally by \r\n at the
+    // viewport bottom. Verify the final grid has STATUS at the bottom.
     const grid = loop.getGrid();
     expect(grid).not.toBeNull();
     const lines = gridToDebugString(grid!).split('\n');

@@ -4,6 +4,7 @@ import {
   serializeNewRows,
   serializeRowsForExit,
   serializeRowRange,
+  InlineCursor,
 } from '../../src/core/emit.js';
 import {
   createCellBuffer,
@@ -24,6 +25,20 @@ import { ColorMode, Attr } from '../../src/core/cell.js';
 
 function makeTables() {
   return { ct: new CharTable(), st: new StyleTable(), lt: new LinkTable() };
+}
+
+/** Helper: run diffBuffers with a fresh cursor and return { output }. */
+function runDiff(
+  front: CellBuffer,
+  back: CellBuffer,
+  st: StyleTable,
+  ct: CharTable,
+  lt: LinkTable,
+  hyperlinks = false,
+): { output: string } {
+  const cursor = new InlineCursor(0, 0, back.width);
+  diffBuffers(front, back, st, ct, lt, hyperlinks, cursor);
+  return { output: cursor.output };
 }
 
 /** Write a string into a buffer row starting at col. */
@@ -48,7 +63,7 @@ describe('diffBuffers', () => {
     const front = createCellBuffer(10, 5);
     const back = createCellBuffer(10, 5);
     // Neither buffer has any damage
-    const output = diffBuffers(front, back, st, ct, new LinkTable(), false);
+    const { output } = runDiff(front, back, st, ct, new LinkTable());
     expect(output).toBe('');
   });
 
@@ -61,7 +76,7 @@ describe('diffBuffers', () => {
 
     writeString(back, 0, 0, 'hXllo', ct);
 
-    const output = diffBuffers(front, back, st, ct, new LinkTable(), false);
+    const { output } = runDiff(front, back, st, ct, new LinkTable());
     // Should contain the character 'X'
     expect(output).toContain('X');
     // Should have a cursor movement to column 1 (CSI 2G)
@@ -82,7 +97,7 @@ describe('diffBuffers', () => {
     const back = createCellBuffer(10, 1);
     writeCell(back, 0, 0, ct.intern('A'), boldId, NO_LINK, NORMAL_WIDTH);
 
-    const output = diffBuffers(front, back, st, ct, new LinkTable(), false);
+    const { output } = runDiff(front, back, st, ct, new LinkTable());
     // Should contain SGR for bold (ESC[1m or similar)
     expect(output).toContain('1');
     expect(output).toContain('m');
@@ -99,7 +114,7 @@ describe('diffBuffers', () => {
     // Use expandDamageForShrink to include the erased row in damage bounds.
     expandDamageForShrink(front, back);
 
-    const output = diffBuffers(front, back, st, ct, new LinkTable(), false);
+    const { output } = runDiff(front, back, st, ct, new LinkTable());
     // Should contain erase-to-end or erase-line
     expect(output).toMatch(/\x1b\[\d*K/);
   });
@@ -114,7 +129,7 @@ describe('diffBuffers', () => {
     writeString(back, 0, 0, 'A', ct);
     writeString(back, 2, 0, 'new', ct);
 
-    const output = diffBuffers(front, back, st, ct, new LinkTable(), false);
+    const { output } = runDiff(front, back, st, ct, new LinkTable());
     expect(output).toContain('n');
     expect(output).toContain('e');
     expect(output).toContain('w');
@@ -133,7 +148,7 @@ describe('diffBuffers', () => {
     writeString(back, 1, 0, 'also same', ct);
     writeString(back, 2, 0, 'DIFFERENT', ct);
 
-    const output = diffBuffers(front, back, st, ct, new LinkTable(), false);
+    const { output } = runDiff(front, back, st, ct, new LinkTable());
     // Should contain 'DIFFERENT' chars but NOT 'unchanged' or 'also same'
     expect(output).toContain('D');
     expect(output).toContain('I');
@@ -152,7 +167,7 @@ describe('diffBuffers', () => {
     writeCell(back, 0, 0, ct.intern('好'), DEFAULT_STYLE, NO_LINK, WIDE_WIDTH);
     writeCell(back, 0, 1, EMPTY_CHAR, DEFAULT_STYLE, NO_LINK, CONTINUATION_WIDTH);
 
-    const output = diffBuffers(front, back, st, ct, new LinkTable(), false);
+    const { output } = runDiff(front, back, st, ct, new LinkTable());
     expect(output).toContain('好');
     // Should NOT contain the continuation cell's empty string
   });
@@ -174,7 +189,7 @@ describe('diffBuffers — content shrink (front taller than back)', () => {
       writeString(back, r, 0, `row${r}`, ct);
     }
 
-    const output = diffBuffers(front, back, st, ct, new LinkTable(), false);
+    const { output } = runDiff(front, back, st, ct, new LinkTable());
     // Rows 20-29 had content in front → should be erased
     const eraseCount = (output.match(/\x1b\[2K/g) || []).length;
     expect(eraseCount).toBe(10);
@@ -195,7 +210,7 @@ describe('diffBuffers — content shrink (front taller than back)', () => {
       writeString(back, r, 0, `line${r}`, ct);
     }
 
-    const output = diffBuffers(front, back, st, ct, new LinkTable(), false);
+    const { output } = runDiff(front, back, st, ct, new LinkTable());
     // Rows 5-9 were blank in front → no erase needed
     const eraseCount = (output.match(/\x1b\[2K/g) || []).length;
     expect(eraseCount).toBe(0);
@@ -219,7 +234,7 @@ describe('diffBuffers — content shrink (front taller than back)', () => {
       writeString(back, r, 0, `line${r}`, ct);
     }
 
-    const output = diffBuffers(front, back, st, ct, new LinkTable(), false);
+    const { output } = runDiff(front, back, st, ct, new LinkTable());
     // Rows 4-5 blank → skip, rows 6-7 had content → erase
     const eraseCount = (output.match(/\x1b\[2K/g) || []).length;
     expect(eraseCount).toBe(2);
@@ -238,7 +253,7 @@ describe('diffBuffers — content shrink (front taller than back)', () => {
       writeString(back, r, 0, `R${r}`, ct);
     }
 
-    const output = diffBuffers(front, back, st, ct, new LinkTable(), false);
+    const { output } = runDiff(front, back, st, ct, new LinkTable());
     // The output should NOT contain any of the removed row content
     expect(output).not.toContain('R3');
     expect(output).not.toContain('R4');
@@ -257,12 +272,13 @@ describe('serializeNewRows', () => {
     writeString(buf, 3, 0, 'def', ct);
     writeString(buf, 4, 0, 'ghi', ct);
 
-    const result = serializeNewRows(buf, 2, 5, st, ct, new LinkTable(), false);
-    expect(result.output).toContain('abc');
-    expect(result.output).toContain('def');
-    expect(result.output).toContain('ghi');
-    // Uses pending-wrap separator (space + backspace) between rows
-    expect(result.output).toContain(' \x08');
+    const cursor = new InlineCursor(0, 0, buf.width);
+    serializeNewRows(buf, 2, 5, st, ct, new LinkTable(), false, cursor);
+    expect(cursor.output).toContain('abc');
+    expect(cursor.output).toContain('def');
+    expect(cursor.output).toContain('ghi');
+    // Uses \r\n separator between rows
+    expect(cursor.output).toContain('\r\n');
   });
 });
 
@@ -295,8 +311,8 @@ describe('serializeRowRange', () => {
     const result = serializeRowRange(buf, 0, 3, st, ct, new LinkTable(), false);
     expect(result.output).toContain('A');
     expect(result.output).toContain('B');
-    // Should have row separators for all 3 rows
-    const separatorCount = (result.output.match(/ \x08/g) || []).length;
+    // Should have \r\n row separators for all 3 rows
+    const separatorCount = (result.output.match(/\r\n/g) || []).length;
     expect(separatorCount).toBe(2); // between row 0-1 and 1-2
   });
 });
@@ -317,7 +333,7 @@ describe('diffBuffers — damage scoping', () => {
       writeString(back, r, 0, r === 5 ? 'CHANGED' : `row${r}`, ct);
     }
 
-    const output = diffBuffers(front, back, st, ct, new LinkTable(), false);
+    const { output } = runDiff(front, back, st, ct, new LinkTable());
     expect(output).toContain('C');
     expect(output).toContain('H');
     expect(output).not.toContain('row0');
@@ -338,7 +354,7 @@ describe('integration — diff with styled content', () => {
     const back = createCellBuffer(10, 1);
     writeCell(back, 0, 0, ct.intern('B'), blueId, NO_LINK, NORMAL_WIDTH);
 
-    const output = diffBuffers(front, back, st, ct, new LinkTable(), false);
+    const { output } = runDiff(front, back, st, ct, new LinkTable());
     // The transition from red to blue is a fg-only change
     const expectedTransition = st.transition(redId, blueId);
     expect(output).toContain(expectedTransition);
@@ -353,7 +369,7 @@ describe('integration — diff with styled content', () => {
     const back = createCellBuffer(10, 1);
     writeCell(back, 0, 0, ct.intern('X'), boldId, NO_LINK, NORMAL_WIDTH);
 
-    const output = diffBuffers(front, back, st, ct, new LinkTable(), false);
+    const { output } = runDiff(front, back, st, ct, new LinkTable());
     // Should end with SGR reset since a non-default style was active
     expect(output.endsWith('\x1b[0m')).toBe(true);
   });

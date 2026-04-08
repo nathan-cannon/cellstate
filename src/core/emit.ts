@@ -97,22 +97,69 @@ function emitWideCharWithFix(char: string, col: number, screenWidth: number): st
 // --- Cursor movement ---
 
 /**
- * Emit relative cursor movement. Uses CUU/CUD for vertical,
- * CHA for horizontal. CHA is column-absolute within the current line,
- * safe in inline mode.
+ * Structured cursor for inline rendering. Tracks mutable row/col state,
+ * accumulates output into an internal buffer, and emits relative ANSI
+ * sequences (CUU/CUD/CHA) — never CUP.
  */
-function moveCursor(
-  fromRow: number,
-  fromCol: number,
-  toRow: number,
-  toCol: number,
-): string {
-  let seq = '';
-  const dRow = toRow - fromRow;
-  if (dRow < 0) seq += `${ESC}${-dRow}A`;
-  else if (dRow > 0) seq += `${ESC}${dRow}B`;
-  if (toCol !== fromCol) seq += `${ESC}${toCol + 1}G`;
-  return seq;
+export class InlineCursor {
+  col: number;
+  row: number;
+  private buf: string = '';
+  private readonly viewportWidth: number;
+
+  constructor(col: number, row: number, viewportWidth: number) {
+    this.col = col;
+    this.row = row;
+    this.viewportWidth = viewportWidth;
+  }
+
+  get output(): string {
+    return this.buf;
+  }
+
+  /**
+   * Emit relative sequences to move from current position to (targetCol, targetRow).
+   * Handles pending-wrap state (col >= viewportWidth) by emitting \r first.
+   */
+  moveTo(targetCol: number, targetRow: number): void {
+    // Resolve pending wrap state without advancing to next line
+    if (this.col >= this.viewportWidth) {
+      this.buf += '\r';
+      this.col = 0;
+    }
+
+    const dRow = targetRow - this.row;
+    if (dRow !== 0) {
+      // Cross-line move: always \r first to go to col 0, then vertical, then CHA
+      this.buf += '\r';
+      if (dRow < 0) this.buf += `${ESC}${-dRow}A`;
+      else this.buf += `${ESC}${dRow}B`;
+      if (targetCol !== 0) this.buf += `${ESC}${targetCol + 1}G`;
+    } else {
+      // Same-line move
+      if (targetCol !== this.col) this.buf += `${ESC}${targetCol + 1}G`;
+    }
+
+    this.col = targetCol;
+    this.row = targetRow;
+  }
+
+  /** Update col after writing a visible character. Does NOT auto-advance row on wrap. */
+  advance(cols: number): void {
+    this.col += cols;
+  }
+
+  /** Emit \r\n — creates a new line (scrolls at bottom margin). */
+  newline(): void {
+    this.buf += '\r\n';
+    this.col = 0;
+    this.row += 1;
+  }
+
+  /** Append raw string (SGR, OSC, EL, etc.) without updating cursor position. */
+  writeRaw(str: string): void {
+    this.buf += str;
+  }
 }
 
 // --- Row helpers ---
@@ -156,8 +203,9 @@ export function diffBuffers(
   charTable: CharTable,
   linkTable: LinkTable,
   hyperlinksEnabled: boolean,
+  cursor: InlineCursor,
   perf?: Perf,
-): string {
+): void {
   const width = back.width;
   const height = back.height;
   const frontHeight = front.height;
@@ -166,7 +214,7 @@ export function diffBuffers(
   const fd = front.damageBox;
   const bd = back.damageBox;
 
-  if (fd === null && bd === null) return '';
+  if (fd === null && bd === null) return;
 
   let minRow: number, maxRow: number;
   if (fd === null) {
@@ -184,7 +232,7 @@ export function diffBuffers(
   minRow = Math.max(0, minRow);
   maxRow = Math.min(height - 1, maxRow);
 
-  if (minRow > maxRow) return '';
+  if (minRow > maxRow) return;
 
   // Track damage stats
   if (perf) {
@@ -193,9 +241,6 @@ export function diffBuffers(
     perf.count('damageSkippedCells', (height - damageRows) * width);
   }
 
-  let out = '';
-  let curRow = 0;
-  let curCol = 0;
   let curStyleId = DEFAULT_STYLE;
   let curLinkId = NO_LINK;
   let styleKnown = false;
@@ -205,21 +250,19 @@ export function diffBuffers(
 
     // Check: entire back row is blank but front had content → bulk erase
     if (!isNewRow && isBlankRow(back, r) && !isBlankRow(front, r)) {
-      if (curRow !== r || curCol !== 0) {
-        out += moveCursor(curRow, curCol, r, 0);
-        curRow = r;
-        curCol = 0;
+      if (cursor.row !== r || cursor.col !== 0) {
+        cursor.moveTo(0, r);
       }
       if (hyperlinksEnabled && curLinkId !== NO_LINK) {
-        out += OSC8_CLOSE;
+        cursor.writeRaw(OSC8_CLOSE);
         curLinkId = NO_LINK;
       }
       if (!styleKnown || curStyleId !== DEFAULT_STYLE) {
-        out += `${ESC}0m`;
+        cursor.writeRaw(`${ESC}0m`);
         curStyleId = DEFAULT_STYLE;
       }
       styleKnown = true;
-      out += `${ESC}2K`;
+      cursor.writeRaw(`${ESC}2K`);
       continue;
     }
 
@@ -257,42 +300,38 @@ export function diffBuffers(
         if (isNewRow) break; // new row, blank from here → nothing to emit
         if (isBlankFrom(front, r, c)) break; // front was also blank → skip
 
-        if (curRow !== r || curCol !== c) {
-          out += moveCursor(curRow, curCol, r, c);
-          curRow = r;
-          curCol = c;
+        if (cursor.row !== r || cursor.col !== c) {
+          cursor.moveTo(c, r);
         }
         if (hyperlinksEnabled && curLinkId !== NO_LINK) {
-          out += OSC8_CLOSE;
+          cursor.writeRaw(OSC8_CLOSE);
           curLinkId = NO_LINK;
         }
         if (!styleKnown || curStyleId !== DEFAULT_STYLE) {
-          out += `${ESC}0m`;
+          cursor.writeRaw(`${ESC}0m`);
           curStyleId = DEFAULT_STYLE;
         }
         styleKnown = true;
-        out += `${ESC}0K`;
+        cursor.writeRaw(`${ESC}0K`);
         break;
       }
 
       // Position cursor
-      if (curRow !== r || curCol !== c) {
-        out += moveCursor(curRow, curCol, r, c);
-        curRow = r;
-        curCol = c;
+      if (cursor.row !== r || cursor.col !== c) {
+        cursor.moveTo(c, r);
       }
 
       // Style transition
       const backStyleId = (backW1 >>> STYLE_SHIFT) & STYLE_MASK;
       if (!styleKnown) {
-        out += `${ESC}0m`;
+        cursor.writeRaw(`${ESC}0m`);
         if (backStyleId !== DEFAULT_STYLE) {
-          out += styleTable.transition(DEFAULT_STYLE, backStyleId);
+          cursor.writeRaw(styleTable.transition(DEFAULT_STYLE, backStyleId));
         }
         curStyleId = backStyleId;
         styleKnown = true;
       } else if (backStyleId !== curStyleId) {
-        out += styleTable.transition(curStyleId, backStyleId);
+        cursor.writeRaw(styleTable.transition(curStyleId, backStyleId));
         curStyleId = backStyleId;
       }
 
@@ -300,7 +339,7 @@ export function diffBuffers(
       if (hyperlinksEnabled) {
         const backLinkId = (backW1 >>> LINK_SHIFT) & LINK_MASK;
         if (backLinkId !== curLinkId) {
-          out += transitionLink(curLinkId, backLinkId, linkTable);
+          cursor.writeRaw(transitionLink(curLinkId, backLinkId, linkTable));
           curLinkId = backLinkId;
         }
       }
@@ -308,11 +347,12 @@ export function diffBuffers(
       // Write character
       const ch = charTable.resolve(backW0);
       if (backWidth === WIDE_WIDTH && requiresCursorFix(ch)) {
-        out += emitWideCharWithFix(ch, curCol, width);
+        cursor.writeRaw(emitWideCharWithFix(ch, cursor.col, width));
+        cursor.advance(2);
       } else {
-        out += ch;
+        cursor.writeRaw(ch);
+        cursor.advance(backWidth === WIDE_WIDTH ? 2 : 1);
       }
-      curCol += backWidth === WIDE_WIDTH ? 2 : 1;
 
       // If front had a wide char here but back has narrow, clear orphan
       if (!isNewRow && backWidth === NORMAL_WIDTH && c + 1 < width) {
@@ -320,8 +360,8 @@ export function diffBuffers(
         const frontW1 = front.cellWords[frontOffset + 1]!;
         const frontWidth = (frontW1 >>> WIDTH_SHIFT) & WIDTH_MASK;
         if (frontWidth === WIDE_WIDTH) {
-          out += ' ';
-          curCol++;
+          cursor.writeRaw(' ');
+          cursor.advance(1);
         }
       }
     }
@@ -333,32 +373,28 @@ export function diffBuffers(
   if (frontHeight > height) {
     for (let r = height; r < frontHeight; r++) {
       if (isBlankRow(front, r)) continue;
-      if (curRow !== r || curCol !== 0) {
-        out += moveCursor(curRow, curCol, r, 0);
-        curRow = r;
-        curCol = 0;
+      if (cursor.row !== r || cursor.col !== 0) {
+        cursor.moveTo(0, r);
       }
       if (hyperlinksEnabled && curLinkId !== NO_LINK) {
-        out += OSC8_CLOSE;
+        cursor.writeRaw(OSC8_CLOSE);
         curLinkId = NO_LINK;
       }
       if (!styleKnown || curStyleId !== DEFAULT_STYLE) {
-        out += `${ESC}0m`;
+        cursor.writeRaw(`${ESC}0m`);
         curStyleId = DEFAULT_STYLE;
       }
       styleKnown = true;
-      out += `${ESC}2K`;
+      cursor.writeRaw(`${ESC}2K`);
     }
   }
 
   if (hyperlinksEnabled && curLinkId !== NO_LINK) {
-    out += OSC8_CLOSE;
+    cursor.writeRaw(OSC8_CLOSE);
   }
-  if (out.length > 0 && styleKnown && curStyleId !== DEFAULT_STYLE) {
-    out += `${ESC}0m`;
+  if (cursor.output.length > 0 && styleKnown && curStyleId !== DEFAULT_STYLE) {
+    cursor.writeRaw(`${ESC}0m`);
   }
-
-  return out;
 }
 
 // --- Serialization functions ---
@@ -376,14 +412,12 @@ export function serializeNewRows(
   charTable: CharTable,
   linkTable: LinkTable,
   hyperlinksEnabled: boolean,
+  cursor: InlineCursor,
   perf?: Perf,
-): { output: string; endRow: number; endCol: number } {
-  let out = '';
-  let curRow = 0;
-  let curCol = 0;
+): void {
+  const width = back.width;
   let curStyleId = DEFAULT_STYLE;
   let curLinkId = NO_LINK;
-  const width = back.width;
 
   const lastRow = Math.min(endRow, back.height);
 
@@ -391,22 +425,20 @@ export function serializeNewRows(
     const relRow = r - startRow;
 
     if (relRow > 0) {
-      // Close active link before row separator
       if (hyperlinksEnabled && curLinkId !== NO_LINK) {
-        out += OSC8_CLOSE;
+        cursor.writeRaw(OSC8_CLOSE);
         curLinkId = NO_LINK;
       }
-      // Reset style before row separator to prevent bg bleed on the space
       if (curStyleId !== DEFAULT_STYLE) {
-        out += `${ESC}0m`;
+        cursor.writeRaw(`${ESC}0m`);
         curStyleId = DEFAULT_STYLE;
       }
-      out += ' \x08';
-      curRow = relRow;
-      curCol = 0;
+      cursor.newline();
     }
 
-    for (let c = 0; c < width; c++) {
+    const colEnd = lastContentCol(back, r);
+
+    for (let c = 0; c <= colEnd; c++) {
       const offset = (r * width + c) * 2;
       const w0 = back.cellWords[offset]!;
       const w1 = back.cellWords[offset + 1]!;
@@ -416,40 +448,39 @@ export function serializeNewRows(
 
       const cellStyleId = (w1 >>> STYLE_SHIFT) & STYLE_MASK;
       if (cellStyleId !== curStyleId) {
-        out += styleTable.transition(curStyleId, cellStyleId);
+        cursor.writeRaw(styleTable.transition(curStyleId, cellStyleId));
         curStyleId = cellStyleId;
       }
 
       if (hyperlinksEnabled) {
         const cellLinkId = (w1 >>> LINK_SHIFT) & LINK_MASK;
         if (cellLinkId !== curLinkId) {
-          out += transitionLink(curLinkId, cellLinkId, linkTable);
+          cursor.writeRaw(transitionLink(curLinkId, cellLinkId, linkTable));
           curLinkId = cellLinkId;
         }
       }
 
       const ch = charTable.resolve(w0);
       if (cellWidth === WIDE_WIDTH && requiresCursorFix(ch)) {
-        out += emitWideCharWithFix(ch, curCol, width);
+        cursor.writeRaw(emitWideCharWithFix(ch, cursor.col, width));
+        cursor.advance(2);
       } else {
-        out += ch;
+        cursor.writeRaw(ch);
+        cursor.advance(cellWidth === WIDE_WIDTH ? 2 : 1);
       }
-      curCol += cellWidth === WIDE_WIDTH ? 2 : 1;
     }
   }
 
   if (hyperlinksEnabled && curLinkId !== NO_LINK) {
-    out += OSC8_CLOSE;
+    cursor.writeRaw(OSC8_CLOSE);
   }
-  if (out.length > 0 && curStyleId !== DEFAULT_STYLE) {
-    out += `${ESC}0m`;
+  if (cursor.output.length > 0 && curStyleId !== DEFAULT_STYLE) {
+    cursor.writeRaw(`${ESC}0m`);
   }
 
   if (perf) {
     perf.count('growthRowsEmitted', lastRow - startRow);
   }
-
-  return { output: out, endRow: curRow, endCol: curCol };
 }
 
 /**
@@ -544,12 +575,10 @@ export function serializeRowRange(
   linkTable: LinkTable,
   hyperlinksEnabled: boolean,
 ): { output: string; endRow: number; endCol: number } {
-  let out = '';
-  let curRow = 0;
-  let curCol = 0;
+  const width = back.width;
+  const cursor = new InlineCursor(0, 0, width);
   let curStyleId = DEFAULT_STYLE;
   let curLinkId = NO_LINK;
-  const width = back.width;
 
   const lastRow = Math.min(endRow, back.height);
 
@@ -558,15 +587,19 @@ export function serializeRowRange(
 
     if (relRow > 0) {
       if (hyperlinksEnabled && curLinkId !== NO_LINK) {
-        out += OSC8_CLOSE;
+        cursor.writeRaw(OSC8_CLOSE);
         curLinkId = NO_LINK;
       }
-      out += ' \x08';
-      curRow = relRow;
-      curCol = 0;
+      if (curStyleId !== DEFAULT_STYLE) {
+        cursor.writeRaw(`${ESC}0m`);
+        curStyleId = DEFAULT_STYLE;
+      }
+      cursor.newline();
     }
 
-    for (let c = 0; c < width; c++) {
+    const colEnd = lastContentCol(back, r);
+
+    for (let c = 0; c <= colEnd; c++) {
       const offset = (r * width + c) * 2;
       const w0 = back.cellWords[offset]!;
       const w1 = back.cellWords[offset + 1]!;
@@ -576,36 +609,37 @@ export function serializeRowRange(
 
       const cellStyleId = (w1 >>> STYLE_SHIFT) & STYLE_MASK;
       if (cellStyleId !== curStyleId) {
-        out += styleTable.transition(curStyleId, cellStyleId);
+        cursor.writeRaw(styleTable.transition(curStyleId, cellStyleId));
         curStyleId = cellStyleId;
       }
 
       if (hyperlinksEnabled) {
         const cellLinkId = (w1 >>> LINK_SHIFT) & LINK_MASK;
         if (cellLinkId !== curLinkId) {
-          out += transitionLink(curLinkId, cellLinkId, linkTable);
+          cursor.writeRaw(transitionLink(curLinkId, cellLinkId, linkTable));
           curLinkId = cellLinkId;
         }
       }
 
       const ch = charTable.resolve(w0);
       if (cellWidth === WIDE_WIDTH && requiresCursorFix(ch)) {
-        out += emitWideCharWithFix(ch, curCol, width);
+        cursor.writeRaw(emitWideCharWithFix(ch, cursor.col, width));
+        cursor.advance(2);
       } else {
-        out += ch;
+        cursor.writeRaw(ch);
+        cursor.advance(cellWidth === WIDE_WIDTH ? 2 : 1);
       }
-      curCol += cellWidth === WIDE_WIDTH ? 2 : 1;
     }
   }
 
   if (hyperlinksEnabled && curLinkId !== NO_LINK) {
-    out += OSC8_CLOSE;
+    cursor.writeRaw(OSC8_CLOSE);
   }
-  if (out.length > 0 && curStyleId !== DEFAULT_STYLE) {
-    out += `${ESC}0m`;
+  if (cursor.output.length > 0 && curStyleId !== DEFAULT_STYLE) {
+    cursor.writeRaw(`${ESC}0m`);
   }
 
-  return { output: out, endRow: curRow, endCol: curCol };
+  return { output: cursor.output, endRow: cursor.row, endCol: cursor.col };
 }
 
 // --- Full serialize (for full-redraw) ---
@@ -616,33 +650,28 @@ export function serializeAll(
   charTable: CharTable,
   linkTable: LinkTable,
   hyperlinksEnabled: boolean,
-): { output: string; endRow: number; endCol: number } {
-  let out = '';
-  let curRow = 0;
-  let curCol = 0;
+  cursor: InlineCursor,
+): void {
+  const width = back.width;
   let curStyleId = DEFAULT_STYLE;
   let curLinkId = NO_LINK;
-  const width = back.width;
 
   for (let r = 0; r < back.height; r++) {
     if (r > 0) {
       if (hyperlinksEnabled && curLinkId !== NO_LINK) {
-        out += OSC8_CLOSE;
+        cursor.writeRaw(OSC8_CLOSE);
         curLinkId = NO_LINK;
       }
       if (curStyleId !== DEFAULT_STYLE) {
-        out += `${ESC}0m`;
+        cursor.writeRaw(`${ESC}0m`);
         curStyleId = DEFAULT_STYLE;
       }
-      out += ' \x08';
-      curRow = r;
-      curCol = 0;
+      cursor.newline();
     }
 
-    // Erase line to clear stale content
-    out += `${ESC}2K`;
+    const colEnd = lastContentCol(back, r);
 
-    for (let c = 0; c < width; c++) {
+    for (let c = 0; c <= colEnd; c++) {
       const offset = (r * width + c) * 2;
       const w0 = back.cellWords[offset]!;
       const w1 = back.cellWords[offset + 1]!;
@@ -652,35 +681,35 @@ export function serializeAll(
 
       const cellStyleId = (w1 >>> STYLE_SHIFT) & STYLE_MASK;
       if (cellStyleId !== curStyleId) {
-        out += styleTable.transition(curStyleId, cellStyleId);
+        cursor.writeRaw(styleTable.transition(curStyleId, cellStyleId));
         curStyleId = cellStyleId;
       }
 
       if (hyperlinksEnabled) {
         const cellLinkId = (w1 >>> LINK_SHIFT) & LINK_MASK;
         if (cellLinkId !== curLinkId) {
-          out += transitionLink(curLinkId, cellLinkId, linkTable);
+          cursor.writeRaw(transitionLink(curLinkId, cellLinkId, linkTable));
           curLinkId = cellLinkId;
         }
       }
 
       const ch = charTable.resolve(w0);
       if (cellWidth === WIDE_WIDTH && requiresCursorFix(ch)) {
-        out += emitWideCharWithFix(ch, curCol, width);
+        cursor.writeRaw(emitWideCharWithFix(ch, cursor.col, width));
+        cursor.advance(2);
       } else {
-        out += ch;
+        cursor.writeRaw(ch);
+        cursor.advance(cellWidth === WIDE_WIDTH ? 2 : 1);
       }
-      curCol += cellWidth === WIDE_WIDTH ? 2 : 1;
     }
   }
 
   if (hyperlinksEnabled && curLinkId !== NO_LINK) {
-    out += OSC8_CLOSE;
+    cursor.writeRaw(OSC8_CLOSE);
   }
-  if (out.length > 0 && curStyleId !== DEFAULT_STYLE) {
-    out += `${ESC}0m`;
+  if (cursor.output.length > 0 && curStyleId !== DEFAULT_STYLE) {
+    cursor.writeRaw(`${ESC}0m`);
   }
 
-  return { output: out, endRow: curRow, endCol: curCol };
 }
 

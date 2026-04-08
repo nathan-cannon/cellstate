@@ -9,7 +9,7 @@ import { mountRoot, setFlexNodeFactory } from '../../src/core/reconciler.js';
 import { createFlexNodeFactory } from '../../src/layout/yoga-flex.js';
 import { paintTree } from '../../src/core/paint.js';
 import { createCellBuffer, viewportSlice, type CellBuffer } from '../../src/core/cell-buffer.js';
-import { serializeAll } from '../../src/core/emit.js';
+import { serializeAll, InlineCursor } from '../../src/core/emit.js';
 import { CharTable } from '../../src/core/char-table.js';
 import { StyleTable } from '../../src/core/style-table.js';
 import { LinkTable } from '../../src/core/link-table.js';
@@ -78,8 +78,9 @@ function simulateResizeFrame(
   paintTree(root, backBuf, frontBuf, charTable, styleTable, linkTable, 0);
   const backStart = Math.max(0, backBuf.height - rows);
   const backVp = viewportSlice(backBuf, backStart, rows);
-  const result = serializeAll(backVp, styleTable, charTable, linkTable, false);
-  return { backBuf, output: result.output };
+  const cursor = new InlineCursor(0, 0, backVp.width);
+  serializeAll(backVp, styleTable, charTable, linkTable, false, cursor);
+  return { backBuf, output: cursor.output };
 }
 
 let latestRoot: TNode | null = null;

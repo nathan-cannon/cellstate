@@ -1,6 +1,8 @@
 /**
  * Style interning table. Maps style tuples (attrs + fg + bg) to integer IDs,
  * with a transition cache for ANSI escape strings between style pairs.
+ *
+ * Supports color level downgrading: truecolor → 256 → 16 → none.
  */
 import { ColorMode } from './cell.js';
 
@@ -8,6 +10,62 @@ import { ColorMode } from './cell.js';
 export const DEFAULT_STYLE = 0;
 
 const ESC = '\x1b[';
+
+// --- Color conversion utilities ---
+
+/** Convert RGB to nearest ANSI 256-color index. */
+function rgbToAnsi256(r: number, g: number, b: number): number {
+  // Greyscale ramp (indices 232-255) — check if r≈g≈b
+  if (Math.abs(r - g) <= 5 && Math.abs(g - b) <= 5) {
+    const avg = (r + g + b) / 3;
+    if (avg < 4) return 16;   // black
+    if (avg > 248) return 231; // white
+    return Math.round((avg - 8) / 247 * 23) + 232;
+  }
+  // 6x6x6 color cube (indices 16-231)
+  const ri = Math.round(r / 255 * 5);
+  const gi = Math.round(g / 255 * 5);
+  const bi = Math.round(b / 255 * 5);
+  return 16 + 36 * ri + 6 * gi + bi;
+}
+
+/** The 16 basic ANSI colors as RGB. */
+const ANSI_16_RGB: [number, number, number][] = [
+  [0, 0, 0],       // 0  black
+  [128, 0, 0],     // 1  red
+  [0, 128, 0],     // 2  green
+  [128, 128, 0],   // 3  yellow
+  [0, 0, 128],     // 4  blue
+  [128, 0, 128],   // 5  magenta
+  [0, 128, 128],   // 6  cyan
+  [192, 192, 192], // 7  white
+  [128, 128, 128], // 8  bright black
+  [255, 0, 0],     // 9  bright red
+  [0, 255, 0],     // 10 bright green
+  [255, 255, 0],   // 11 bright yellow
+  [0, 0, 255],     // 12 bright blue
+  [255, 0, 255],   // 13 bright magenta
+  [0, 255, 255],   // 14 bright cyan
+  [255, 255, 255], // 15 bright white
+];
+
+/** Convert RGB to nearest basic 16 ANSI color index by Euclidean distance. */
+function rgbToAnsi16(r: number, g: number, b: number): number {
+  let bestIdx = 0;
+  let bestDist = Infinity;
+  for (let i = 0; i < 16; i++) {
+    const [cr, cg, cb] = ANSI_16_RGB[i]!;
+    const dr = r - cr, dg = g - cg, db = b - cb;
+    const dist = dr * dr + dg * dg + db * db;
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
+}
+
+// --- Style table ---
 
 interface StyleEntry {
   attrs: number;
@@ -24,8 +82,17 @@ export class StyleTable {
   private map = new Map<number, number>();
   /** Transition cache: packed (fromId, toId) → ANSI string. */
   private transitions = new Map<number, string>();
+  /**
+   * Terminal color level:
+   *   3 = truecolor (38;2;R;G;B)
+   *   2 = 256-color (38;5;N)
+   *   1 = 16-color (30-37/90-97)
+   *   0 = no color
+   */
+  readonly colorLevel: number;
 
-  constructor() {
+  constructor(colorLevel: number = 3) {
+    this.colorLevel = colorLevel;
     // Pre-register default style at ID 0
     const entry: StyleEntry = {
       attrs: 0,
@@ -149,15 +216,34 @@ export class StyleTable {
   // --- SGR computation (ported from diff.ts styleDelta/styleToAnsi) ---
 
   private colorSgrParams(mode: number, value: number, fgOrBg: 'fg' | 'bg'): string {
+    const level = this.colorLevel;
     if (mode === ColorMode.Default) {
       return fgOrBg === 'fg' ? '39' : '49';
     } else if (mode === ColorMode.Palette) {
+      // Palette colors pass through regardless of level
       return fgOrBg === 'fg' ? `38;5;${value}` : `48;5;${value}`;
     } else {
+      // RGB mode — downgrade based on color level
       const r = (value >> 16) & 0xff;
       const g = (value >> 8) & 0xff;
       const b = value & 0xff;
-      return fgOrBg === 'fg' ? `38;2;${r};${g};${b}` : `48;2;${r};${g};${b}`;
+      if (level >= 3) {
+        return fgOrBg === 'fg' ? `38;2;${r};${g};${b}` : `48;2;${r};${g};${b}`;
+      } else if (level === 2) {
+        const idx = rgbToAnsi256(r, g, b);
+        return fgOrBg === 'fg' ? `38;5;${idx}` : `48;5;${idx}`;
+      } else if (level === 1) {
+        const idx = rgbToAnsi16(r, g, b);
+        // Basic 16 colors: 0-7 → 30-37 (fg) / 40-47 (bg), 8-15 → 90-97 / 100-107
+        if (fgOrBg === 'fg') {
+          return idx < 8 ? `${30 + idx}` : `${90 + idx - 8}`;
+        } else {
+          return idx < 8 ? `${40 + idx}` : `${100 + idx - 8}`;
+        }
+      } else {
+        // No color
+        return fgOrBg === 'fg' ? '39' : '49';
+      }
     }
   }
 
@@ -172,27 +258,8 @@ export class StyleTable {
     if (s.attrs & 32) parts.push('7');  // inverse
     if (s.attrs & 8) parts.push('9');   // strikethrough
 
-    if (s.fgMode === ColorMode.Default) {
-      parts.push('39');
-    } else if (s.fgMode === ColorMode.Palette) {
-      parts.push(`38;5;${s.fgValue}`);
-    } else {
-      const r = (s.fgValue >> 16) & 0xff;
-      const g = (s.fgValue >> 8) & 0xff;
-      const b = s.fgValue & 0xff;
-      parts.push(`38;2;${r};${g};${b}`);
-    }
-
-    if (s.bgMode === ColorMode.Default) {
-      parts.push('49');
-    } else if (s.bgMode === ColorMode.Palette) {
-      parts.push(`48;5;${s.bgValue}`);
-    } else {
-      const r = (s.bgValue >> 16) & 0xff;
-      const g = (s.bgValue >> 8) & 0xff;
-      const b = s.bgValue & 0xff;
-      parts.push(`48;2;${r};${g};${b}`);
-    }
+    parts.push(this.colorSgrParams(s.fgMode, s.fgValue, 'fg'));
+    parts.push(this.colorSgrParams(s.bgMode, s.bgValue, 'bg'));
 
     return `${ESC}${parts.join(';')}m`;
   }

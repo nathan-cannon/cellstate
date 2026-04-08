@@ -4,7 +4,7 @@ import { CharTable } from '../../src/core/char-table.js';
 import { StyleTable } from '../../src/core/style-table.js';
 import { LinkTable } from '../../src/core/link-table.js';
 import { paintTree } from '../../src/core/paint.js';
-import { diffBuffers } from '../../src/core/emit.js';
+import { diffBuffers, InlineCursor } from '../../src/core/emit.js';
 import { createFlexNodeFactory } from '../../src/layout/yoga-flex.js';
 import { buildChatTree, buildMarkdownChatTree } from '../content.js';
 import { measure, computeStats, fmtMs, printTable } from '../harness.js';
@@ -119,12 +119,14 @@ export async function runPipelineBreakdown(): Promise<void> {
     const frontVp = viewportSlice(frontBuf, scrollOffset, ROWS);
     const backVp = viewportSlice(backBuf, Math.max(0, (lastNonBlankRow(backBuf) + 1) - ROWS), ROWS);
     const diffChangedLat = measure(() => {
-      diffBuffers(frontVp, backVp, styleTable, charTable, linkTable, false);
+      const cursor = new InlineCursor(0, 0, backVp.width);
+      diffBuffers(frontVp, backVp, styleTable, charTable, linkTable, false, cursor);
     }, ITERATIONS, WARMUP);
 
     // Measure diffBuffers (identical)
     const diffEqLat = measure(() => {
-      diffBuffers(frontVp, frontVp, styleTable, charTable, linkTable, false);
+      const cursor = new InlineCursor(0, 0, frontVp.width);
+      diffBuffers(frontVp, frontVp, styleTable, charTable, linkTable, false, cursor);
     }, ITERATIONS, WARMUP);
 
     const layoutMs = computeStats(layoutLat).median;
@@ -232,7 +234,8 @@ export async function runPipelineBreakdown(): Promise<void> {
     const backVp = viewportSlice(backBuf, Math.max(0, (lastNonBlankRow(backBuf) + 1) - ROWS), ROWS);
 
     const diffChangedLat = measure(() => {
-      diffBuffers(frontVp, backVp, styleTable, charTable, linkTable, false);
+      const cursor = new InlineCursor(0, 0, backVp.width);
+      diffBuffers(frontVp, backVp, styleTable, charTable, linkTable, false, cursor);
     }, ITERATIONS, WARMUP);
 
     const layoutMs = computeStats(layoutLat).median;

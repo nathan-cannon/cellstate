@@ -4,7 +4,7 @@ import { CharTable } from '../../src/core/char-table.js';
 import { StyleTable } from '../../src/core/style-table.js';
 import { LinkTable } from '../../src/core/link-table.js';
 import { paintTree } from '../../src/core/paint.js';
-import { diffBuffers } from '../../src/core/emit.js';
+import { diffBuffers, InlineCursor } from '../../src/core/emit.js';
 import { createFlexNodeFactory } from '../../src/layout/yoga-flex.js';
 import { buildChatTree } from '../content.js';
 import { measure, computeStats, fmtMs, printTable } from '../harness.js';
@@ -125,17 +125,23 @@ export async function runGrowthFrame(): Promise<void> {
 
     // Measure diffBuffers for growth frame
     const growthDiffLat = measure(() => {
-      diffBuffers(frontVpGrowth, backVpGrowth, styleTable, charTable, linkTable, false);
+      const cursor = new InlineCursor(0, 0, backVpGrowth.width);
+      diffBuffers(frontVpGrowth, backVpGrowth, styleTable, charTable, linkTable, false, cursor);
     }, ITERATIONS, WARMUP);
 
     // Measure diffBuffers for update frame
     const updateDiffLat = measure(() => {
-      diffBuffers(frontVpUpdate, backVpUpdate, styleTable, charTable, linkTable, false);
+      const cursor = new InlineCursor(0, 0, backVpUpdate.width);
+      diffBuffers(frontVpUpdate, backVpUpdate, styleTable, charTable, linkTable, false, cursor);
     }, ITERATIONS, WARMUP);
 
     // Get output sizes (single sample for metadata)
-    const growthBytes = diffBuffers(frontVpGrowth, backVpGrowth, styleTable, charTable, linkTable, false).length;
-    const updateBytes = diffBuffers(frontVpUpdate, backVpUpdate, styleTable, charTable, linkTable, false).length;
+    const growthCursor = new InlineCursor(0, 0, backVpGrowth.width);
+    diffBuffers(frontVpGrowth, backVpGrowth, styleTable, charTable, linkTable, false, growthCursor);
+    const growthBytes = growthCursor.output.length;
+    const updateCursor = new InlineCursor(0, 0, backVpUpdate.width);
+    diffBuffers(frontVpUpdate, backVpUpdate, styleTable, charTable, linkTable, false, updateCursor);
+    const updateBytes = updateCursor.output.length;
 
     const paintGrowthMs = computeStats(paintGrowthLat).median;
     const paintUpdateMs = computeStats(paintUpdateLat).median;

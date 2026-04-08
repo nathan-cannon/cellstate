@@ -1,8 +1,12 @@
 /**
  * Unicode display width: how many terminal columns a character occupies (0, 1, or 2).
- * Width tables derived from Unicode 17.0 data (see scripts/generate-emoji-widths.ts).
+ *
+ * Uses get-east-asian-width for CJK/fullwidth detection and Intl.Segmenter +
+ * emoji-regex for grapheme-cluster-aware string width measurement.
  */
 
+import { eastAsianWidth } from 'get-east-asian-width';
+import emojiRegex from 'emoji-regex';
 import { EMOJI_PRESENTATION_RANGES, TEXT_PRESENTATION_EMOJI_RANGES } from './emoji-data.gen.js';
 
 /** Binary search through sorted [start, end] inclusive ranges. */
@@ -31,9 +35,10 @@ export function charDisplayWidth(codePoint: number): number {
   // width 2 by most terminals despite having Emoji_Presentation=No in Unicode data.
   // Verified against iTerm2, Terminal.app, and kitty via test-terminal-widths.ts.
   if (codePoint === 0x1f202 || codePoint === 0x1f237) return 2;
-  // Wide / fullwidth characters
-  if (isWide(codePoint)) return 2;
-  return 1;
+  // Emoji with default emoji presentation are always width 2 in terminals
+  if (inRanges(codePoint, EMOJI_PRESENTATION_RANGES)) return 2;
+  // Use get-east-asian-width for wide/fullwidth detection (ambiguous = narrow)
+  return eastAsianWidth(codePoint, { ambiguousAsWide: false });
 }
 
 /**
@@ -85,39 +90,6 @@ function isZeroWidth(cp: number): boolean {
   return false;
 }
 
-function isWide(cp: number): boolean {
-  // Hangul Jamo
-  if (cp >= 0x1100 && cp <= 0x115f) return true;
-  // CJK Radicals, Kangxi, CJK Symbols
-  if (cp >= 0x2e80 && cp <= 0x303e) return true;
-  // Hiragana, Katakana, Bopomofo, Kanbun, CJK Compat
-  if (cp >= 0x3040 && cp <= 0x33bf) return true;
-  // CJK Extension A
-  if (cp >= 0x3400 && cp <= 0x4dbf) return true;
-  // CJK Unified Ideographs
-  if (cp >= 0x4e00 && cp <= 0x9fff) return true;
-  // Yi
-  if (cp >= 0xa000 && cp <= 0xa4cf) return true;
-  // Hangul Syllables
-  if (cp >= 0xac00 && cp <= 0xd7af) return true;
-  // CJK Compat Ideographs
-  if (cp >= 0xf900 && cp <= 0xfaff) return true;
-  // CJK Compat Forms, Small Forms
-  if (cp >= 0xfe10 && cp <= 0xfe6f) return true;
-  // Fullwidth Forms
-  if (cp >= 0xff01 && cp <= 0xff60) return true;
-  // Fullwidth Signs
-  if (cp >= 0xffe0 && cp <= 0xffe6) return true;
-  // Emoji with default emoji presentation (always width 2)
-  if (inRanges(cp, EMOJI_PRESENTATION_RANGES)) return true;
-  // CJK Extension B and beyond
-  if (cp >= 0x20000 && cp <= 0x2ffff) return true;
-  // CJK Extension G+
-  if (cp >= 0x30000 && cp <= 0x3ffff) return true;
-
-  return false;
-}
-
 /**
  * Returns true if a codepoint is a skin tone modifier (Fitzpatrick scale).
  * U+1F3FB through U+1F3FF.
@@ -134,6 +106,38 @@ export function isRegionalIndicator(cp: number): boolean {
   return cp >= 0x1f1e6 && cp <= 0x1f1ff;
 }
 
+// --- Intl.Segmenter singleton ---
+
+let segmenter: Intl.Segmenter | null = null;
+function getSegmenter(): Intl.Segmenter {
+  if (!segmenter) segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+  return segmenter;
+}
+
+// --- Emoji / complex sequence detection ---
+
+/**
+ * Returns true if the string contains codepoints that may form multi-codepoint
+ * grapheme clusters (emoji ranges, variation selectors, ZWJ).
+ */
+function needsSegmentation(str: string): boolean {
+  for (let i = 0; i < str.length; i++) {
+    const code = str.charCodeAt(i);
+    // ZWJ (U+200D)
+    if (code === 0x200d) return true;
+    // Variation selectors (U+FE00-U+FE0F)
+    if (code >= 0xfe00 && code <= 0xfe0f) return true;
+    // High surrogates for emoji ranges (U+D800-U+DBFF paired with low surrogates)
+    // Most emoji are in U+1F000+ which uses surrogate pairs starting with 0xD83C-0xD83E
+    if (code >= 0xd83c && code <= 0xd83e) return true;
+    // Skin tone modifiers, regional indicators also use surrogates in this range
+  }
+  return false;
+}
+
+// Keycap combining mark
+const KEYCAP = 0x20e3;
+
 /** Memoization cache for stringDisplayWidth. */
 const WIDTH_MEMO_CAP = 8192;
 const _widthMemo: Map<string, number> = new Map();
@@ -145,57 +149,63 @@ export function clearWidthMemo(): void {
 
 /**
  * Return the total display width of a string in terminal columns.
- * Iterates by code point (handles surrogate pairs correctly).
- * Accounts for VS16 (U+FE0F) upgrading text-presentation emoji to width 2.
- * Accounts for grapheme clusters: skin tone modifiers, ZWJ sequences, and
- * regional indicator pairs are rendered as single glyphs by modern terminals.
+ *
+ * Fast path: if the string has no emoji/ZWJ/VS indicators, iterate codepoints
+ * and sum widths using eastAsianWidth.
+ *
+ * Slow path: use Intl.Segmenter for grapheme clusters, then emoji-regex to
+ * detect emoji clusters (width 2) vs. text clusters (first codepoint's width).
  */
 export function stringDisplayWidth(str: string): number {
+  if (str.length === 0) return 0;
   if (str.length >= 2) {
     const cached = _widthMemo.get(str);
     if (cached !== undefined) return cached;
   }
-  let width = 0;
-  let prevCp = -1;
-  let prevWasZWJ = false;
-  let prevWasRI = false;
-  for (const ch of str) {
-    const cp = ch.codePointAt(0)!;
-    if (cp === 0xfe0f && prevCp >= 0 && isTextPresentationEmoji(prevCp) && charDisplayWidth(prevCp) === 1) {
-      // VS16 after a text-presentation emoji that is width 1: upgrade to width 2
-      width += 1;
-      prevCp = cp;
-      prevWasZWJ = false;
-      prevWasRI = false;
-      continue;
+
+  let width: number;
+  if (!needsSegmentation(str)) {
+    // Fast path: simple codepoint iteration
+    width = 0;
+    for (const ch of str) {
+      width += charDisplayWidth(ch.codePointAt(0)!);
     }
-    const w = charDisplayWidth(cp);
-    // Skin tone modifier after a wide character: part of same grapheme cluster
-    if (isSkinToneModifier(cp) && prevCp >= 0 && charDisplayWidth(prevCp) === 2) {
-      prevCp = cp;
-      prevWasZWJ = false;
-      prevWasRI = false;
-      continue;
+  } else {
+    // Slow path: grapheme segmentation + emoji detection
+    width = 0;
+    const re = emojiRegex();
+    const seg = getSegmenter();
+    for (const { segment } of seg.segment(str)) {
+      if (segment.length === 1) {
+        width += charDisplayWidth(segment.codePointAt(0)!);
+        continue;
+      }
+      // Multi-codepoint cluster: test if it's an emoji
+      re.lastIndex = 0;
+      const m = re.exec(segment);
+      if (m && m[0] === segment) {
+        // Full emoji cluster — check exceptions
+        const firstCp = segment.codePointAt(0)!;
+        // Incomplete keycap: digit + VS16 without U+20E3 — width 1
+        if (segment.length <= 3 && segment.charCodeAt(segment.length - 1) !== KEYCAP &&
+            firstCp >= 0x30 && firstCp <= 0x39) {
+          width += 1;
+          continue;
+        }
+        width += 2;
+      } else {
+        // Not an emoji cluster — use first non-zero-width codepoint's width
+        for (const ch of segment) {
+          const cp = ch.codePointAt(0)!;
+          if (!isZeroWidth(cp)) {
+            width += charDisplayWidth(cp);
+            break;
+          }
+        }
+      }
     }
-    // Second regional indicator completes a flag pair: zero width
-    if (isRegionalIndicator(cp) && prevWasRI) {
-      prevCp = cp;
-      prevWasZWJ = false;
-      prevWasRI = false; // toggle off so third RI starts a new pair
-      continue;
-    }
-    // Emoji after ZWJ: part of same grapheme cluster
-    if (prevWasZWJ && w === 2) {
-      prevCp = cp;
-      prevWasZWJ = false;
-      prevWasRI = false;
-      continue;
-    }
-    width += w;
-    prevWasZWJ = cp === 0x200d;
-    prevWasRI = isRegionalIndicator(cp);
-    prevCp = cp;
   }
+
   if (str.length >= 2) {
     if (_widthMemo.size >= WIDTH_MEMO_CAP) _widthMemo.clear();
     _widthMemo.set(str, width);
@@ -206,114 +216,56 @@ export function stringDisplayWidth(str: string): number {
 /**
  * Slice text from the start to fit within maxCols display columns.
  * Returns a substring whose display width is <= maxCols.
- * Never splits a surrogate pair, a wide character, or a grapheme cluster.
+ * Never splits a grapheme cluster.
  */
 export function sliceToWidth(text: string, maxCols: number): string {
-  let cols = 0;
-  let strIdx = 0;
-  let prevCp = -1;
-  let prevWasZWJ = false;
-  let prevWasRI = false;
-  // Track the string index of the start of the current grapheme cluster,
-  // so we can back up if the cluster overflows.
-  let clusterStartIdx = 0;
-  let colsAtClusterStart = 0;
-  for (const ch of text) {
-    const cp = ch.codePointAt(0)!;
-    let w: number;
-    let partOfCluster = false;
-
-    if (cp === 0xfe0f && prevCp >= 0 && isTextPresentationEmoji(prevCp) && charDisplayWidth(prevCp) === 1) {
-      w = 1;
-      partOfCluster = true;
-    } else if (isSkinToneModifier(cp) && prevCp >= 0 && charDisplayWidth(prevCp) === 2) {
-      w = 0;
-      partOfCluster = true;
-    } else if (isRegionalIndicator(cp) && prevWasRI) {
-      w = 0;
-      partOfCluster = true;
-    } else if (prevWasZWJ && charDisplayWidth(cp) === 2) {
-      w = 0;
-      partOfCluster = true;
-    } else {
-      w = charDisplayWidth(cp);
+  if (!needsSegmentation(text)) {
+    // Fast path: codepoint iteration
+    let cols = 0;
+    let strIdx = 0;
+    for (const ch of text) {
+      const w = charDisplayWidth(ch.codePointAt(0)!);
+      if (cols + w > maxCols) break;
+      cols += w;
+      strIdx += ch.length;
     }
-
-    if (cols + w > maxCols) {
-      if (partOfCluster) {
-        // Cluster overflows — back up to exclude the entire cluster
-        strIdx = clusterStartIdx;
-      }
-      break;
-    }
-
-    if (!partOfCluster) {
-      clusterStartIdx = strIdx;
-      colsAtClusterStart = cols;
-    }
-
-    cols += w;
-    strIdx += ch.length;
-    prevWasZWJ = cp === 0x200d;
-    prevWasRI = isRegionalIndicator(cp) && !partOfCluster;
-    prevCp = cp;
+    return text.slice(0, strIdx);
   }
-  return text.slice(0, strIdx);
+
+  // Slow path: grapheme segmentation
+  const seg = getSegmenter();
+  let cols = 0;
+  let endIdx = 0;
+  for (const { segment, index } of seg.segment(text)) {
+    const w = stringDisplayWidth(segment);
+    if (cols + w > maxCols) break;
+    cols += w;
+    endIdx = index + segment.length;
+  }
+  return text.slice(0, endIdx);
 }
 
 /**
  * Slice text from the end to fit within maxCols display columns.
  * Returns a substring whose display width is <= maxCols.
- * Never splits a surrogate pair, a wide character, or a grapheme cluster.
- *
- * Uses grapheme cluster segmentation to avoid the complexity of
- * reverse-iterating with lookahead for ZWJ/RI/skin tone sequences.
+ * Never splits a grapheme cluster.
  */
 export function sliceFromEndToWidth(text: string, maxCols: number): string {
-  // Segment into grapheme clusters by forward-iterating
-  const clusters: string[] = [];
-  let current = '';
-  let prevCp = -1;
-  let prevWasZWJ = false;
-  let prevWasRI = false;
-
-  for (const ch of text) {
-    const cp = ch.codePointAt(0)!;
-    let partOfCluster = false;
-
-    if (cp === 0xfe0f && prevCp >= 0 && isTextPresentationEmoji(prevCp) && charDisplayWidth(prevCp) === 1) {
-      partOfCluster = true;
-    } else if (isSkinToneModifier(cp) && prevCp >= 0 && charDisplayWidth(prevCp) === 2) {
-      partOfCluster = true;
-    } else if (isRegionalIndicator(cp) && prevWasRI) {
-      partOfCluster = true;
-    } else if (prevWasZWJ && charDisplayWidth(cp) === 2) {
-      partOfCluster = true;
-    } else if (isZeroWidth(cp)) {
-      partOfCluster = true;
-    }
-
-    if (partOfCluster) {
-      current += ch;
-    } else {
-      if (current) clusters.push(current);
-      current = ch;
-    }
-
-    prevWasZWJ = cp === 0x200d;
-    prevWasRI = isRegionalIndicator(cp) && !partOfCluster;
-    prevCp = cp;
+  // Always use segmenter for reverse slicing — simpler and correct
+  const seg = getSegmenter();
+  const clusters: { segment: string; index: number }[] = [];
+  for (const item of seg.segment(text)) {
+    clusters.push(item);
   }
-  if (current) clusters.push(current);
 
-  // Iterate clusters from end
   let cols = 0;
-  let count = 0;
+  let startIdx = text.length;
   for (let i = clusters.length - 1; i >= 0; i--) {
-    const w = stringDisplayWidth(clusters[i]!);
+    const c = clusters[i]!;
+    const w = stringDisplayWidth(c.segment);
     if (cols + w > maxCols) break;
     cols += w;
-    count++;
+    startIdx = c.index;
   }
-  return clusters.slice(clusters.length - count).join('');
+  return text.slice(startIdx);
 }

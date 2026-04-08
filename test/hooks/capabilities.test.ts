@@ -17,6 +17,10 @@ beforeEach(() => {
   delete process.env.TERM;
   delete process.env.TERM_PROGRAM;
   delete process.env.TERM_PROGRAM_VERSION;
+  delete process.env.WT_SESSION;
+  delete process.env.ZED_TERM;
+  delete process.env.KITTY_WINDOW_ID;
+  delete process.env.VTE_VERSION;
 });
 
 afterEach(() => {

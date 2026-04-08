@@ -56,8 +56,8 @@ describe('wrapAnsiText', () => {
     const lines = wrapAnsiText(text, 5);
     expect(lines.length).toBe(2);
 
-    // First line should end with RESET before the break
-    expect(lines[0]).toContain(RESET);
+    // First line should close bold (either full RESET or bold-off \x1b[22m)
+    expect(lines[0]).toMatch(/\x1b\[(0|22)m/);
 
     // Second line should re-open BOLD
     expect(lines[1]).toContain(BOLD);

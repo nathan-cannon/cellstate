@@ -3,21 +3,17 @@
  *
  * Each output line is exactly one terminal row with inline SGR escapes.
  * The caller provides a target width; text is soft-wrapped to that width.
+ *
+ * Uses chalk for SGR generation so output respects the terminal's color level.
  */
-import { stringDisplayWidth, charDisplayWidth } from '../core/width.js';
+import { stringDisplayWidth } from '../core/width.js';
+import wrapAnsi from 'wrap-ansi';
+import chalk from 'chalk';
 import { unified } from 'unified';
 import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 import type { Root, RootContent, PhrasingContent } from 'mdast';
 import { highlightCode } from './highlighter.js';
-
-const ESC = '\x1b[';
-const RESET = '\x1b[0m';
-const BOLD = '\x1b[1m';
-const DIM = '\x1b[2m';
-const ITALIC = '\x1b[3m';
-const UNDERLINE = '\x1b[4m';
-const STRIKETHROUGH = '\x1b[9m';
 
 // ── Markdown block types ──
 
@@ -113,7 +109,7 @@ function renderParagraph(text: string, width: number): string[] {
 function renderHeading(text: string, depth: number, width: number): string[] {
   // Strip heading markers (# chars)
   const content = text.replace(/^#{1,6}\s*/, '').trim();
-  const styled = BOLD + applyInlineStyles(content) + RESET;
+  const styled = chalk.bold(applyInlineStyles(content));
   return wrapAnsiText(styled, width);
 }
 
@@ -147,7 +143,7 @@ function renderCodeBlock(
 }
 
 function renderBlockquote(children: MarkdownBlock[], width: number): string[] {
-  const prefix = DIM + '│ ' + RESET;
+  const prefix = chalk.dim('│ ');
   const innerWidth = Math.max(width - 2, 1);
   const innerLines = generateAnsiLines(children, innerWidth);
   return innerLines.map(line => prefix + line);
@@ -176,7 +172,7 @@ function renderList(
 
 function renderThematicBreak(width: number): string {
   const dashes = '─'.repeat(Math.min(width, 80));
-  return DIM + dashes + RESET;
+  return chalk.dim(dashes);
 }
 
 function renderTable(rows: string[][], width: number): string[] {
@@ -202,21 +198,21 @@ function renderTable(rows: string[][], width: number): string[] {
   }
 
   const result: string[] = [];
-  const separator = DIM + '├' + colWidths.map(w => '─'.repeat(w + 2)).join('┼') + '┤' + RESET;
-  const topBorder = DIM + '┌' + colWidths.map(w => '─'.repeat(w + 2)).join('┬') + '┐' + RESET;
-  const bottomBorder = DIM + '└' + colWidths.map(w => '─'.repeat(w + 2)).join('┴') + '┘' + RESET;
+  const separator = chalk.dim('├' + colWidths.map(w => '─'.repeat(w + 2)).join('┼') + '┤');
+  const topBorder = chalk.dim('┌' + colWidths.map(w => '─'.repeat(w + 2)).join('┬') + '┐');
+  const bottomBorder = chalk.dim('└' + colWidths.map(w => '─'.repeat(w + 2)).join('┴') + '┘');
 
   result.push(topBorder);
 
   for (let r = 0; r < rows.length; r++) {
     const row = rows[r]!;
-    let line = DIM + '│' + RESET;
+    let line = chalk.dim('│');
     for (let c = 0; c < colCount; c++) {
       const cell = (row[c] ?? '').trim();
       const cellWidth = stringDisplayWidth(cell);
       const pad = Math.max(colWidths[c]! - cellWidth, 0);
-      const styled = r === 0 ? BOLD + cell + RESET : cell;
-      line += ' ' + styled + ' '.repeat(pad + 1) + DIM + '│' + RESET;
+      const styled = r === 0 ? chalk.bold(cell) : cell;
+      line += ' ' + styled + ' '.repeat(pad + 1) + chalk.dim('│');
     }
     result.push(line);
 
@@ -234,28 +230,28 @@ function renderTable(rows: string[][], width: number): string[] {
 
 /**
  * Apply inline markdown styles (bold, italic, code, strikethrough, links)
- * to a text string, producing ANSI SGR escapes.
+ * to a text string, producing ANSI SGR escapes via chalk.
  */
 function applyInlineStyles(text: string): string {
   let result = text;
 
   // Bold: **text** or __text__
-  result = result.replace(/\*\*(.+?)\*\*/g, BOLD + '$1' + RESET);
-  result = result.replace(/__(.+?)__/g, BOLD + '$1' + RESET);
+  result = result.replace(/\*\*(.+?)\*\*/g, (_, p1) => chalk.bold(p1));
+  result = result.replace(/__(.+?)__/g, (_, p1) => chalk.bold(p1));
 
   // Italic: *text* or _text_ (not inside bold markers)
-  result = result.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, ITALIC + '$1' + RESET);
-  result = result.replace(/(?<!_)_(?!_)(.+?)(?<!_)_(?!_)/g, ITALIC + '$1' + RESET);
+  result = result.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, (_, p1) => chalk.italic(p1));
+  result = result.replace(/(?<!_)_(?!_)(.+?)(?<!_)_(?!_)/g, (_, p1) => chalk.italic(p1));
 
   // Strikethrough: ~~text~~
-  result = result.replace(/~~(.+?)~~/g, STRIKETHROUGH + '$1' + RESET);
+  result = result.replace(/~~(.+?)~~/g, (_, p1) => chalk.strikethrough(p1));
 
   // Inline code: `text`
-  result = result.replace(/`([^`]+)`/g, DIM + '$1' + RESET);
+  result = result.replace(/`([^`]+)`/g, (_, p1) => chalk.dim(p1));
 
   // Links: [text](url) → underlined text + dim url
   result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g,
-    UNDERLINE + '$1' + RESET + ' ' + DIM + '($2)' + RESET);
+    (_, p1, p2) => chalk.underline(p1) + ' ' + chalk.dim(`(${p2})`));
 
   return result;
 }
@@ -269,66 +265,8 @@ function applyInlineStyles(text: string): string {
  */
 export function wrapAnsiText(text: string, width: number): string[] {
   if (width <= 0) return [text];
-
-  const lines: string[] = [];
-  let currentLine = '';
-  let currentWidth = 0;
-  let activeEscapes: string[] = []; // Stack of currently open SGR codes
-  let i = 0;
-
-  while (i < text.length) {
-    // Check for ESC sequence
-    if (text.charCodeAt(i) === 0x1b && i + 1 < text.length && text.charCodeAt(i + 1) === 0x5b) {
-      // Find the end of the CSI sequence
-      let j = i + 2;
-      while (j < text.length) {
-        const c = text.charCodeAt(j);
-        if (c >= 0x40 && c <= 0x7e) break;
-        j++;
-      }
-      if (j < text.length) j++; // include final byte
-
-      const seq = text.substring(i, j);
-      currentLine += seq;
-
-      // Track active escapes for carrying across wraps
-      if (seq === RESET) {
-        activeEscapes = [];
-      } else if (seq.startsWith(ESC) && seq.endsWith('m')) {
-        activeEscapes.push(seq);
-      }
-
-      i = j;
-      continue;
-    }
-
-    // Regular character
-    const cp = text.codePointAt(i)!;
-    const chLen = cp > 0xffff ? 2 : 1;
-    const ch = text.substring(i, i + chLen);
-    const w = charDisplayWidth(cp);
-
-    if (w > 0 && currentWidth + w > width) {
-      // Need to wrap — close active styles, start new line
-      if (activeEscapes.length > 0) {
-        currentLine += RESET;
-      }
-      lines.push(currentLine);
-      // Start new line, reopening active styles
-      currentLine = activeEscapes.join('');
-      currentWidth = 0;
-    }
-
-    currentLine += ch;
-    currentWidth += w;
-    i += chLen;
-  }
-
-  if (currentLine.length > 0 || lines.length === 0) {
-    lines.push(currentLine);
-  }
-
-  return lines;
+  const wrapped = wrapAnsi(text, width, { hard: true, trim: true });
+  return wrapped.split('\n');
 }
 
 // ── Markdown block parser (remark mdast → MarkdownBlock[]) ──

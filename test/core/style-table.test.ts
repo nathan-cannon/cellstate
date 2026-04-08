@@ -107,3 +107,57 @@ describe('StyleTable', () => {
     expect(t.transitionCacheSize).toBe(2);
   });
 });
+
+describe('StyleTable color downgrading', () => {
+  test('level 3 emits 38;2;R;G;B for RGB fg', () => {
+    const t = new StyleTable(3);
+    const id = t.intern(0, ColorMode.RGB, 0xff8040, ColorMode.Default, 0);
+    const sgr = t.transition(DEFAULT_STYLE, id);
+    expect(sgr).toContain('38;2;255;128;64');
+  });
+
+  test('level 2 emits 38;5;N for RGB fg', () => {
+    const t = new StyleTable(2);
+    const id = t.intern(0, ColorMode.RGB, 0xff0000, ColorMode.Default, 0);
+    const sgr = t.transition(DEFAULT_STYLE, id);
+    expect(sgr).toContain('38;5;');
+    expect(sgr).not.toContain('38;2;');
+  });
+
+  test('level 2 emits 48;5;N for RGB bg', () => {
+    const t = new StyleTable(2);
+    const id = t.intern(0, ColorMode.Default, 0, ColorMode.RGB, 0x00ff00);
+    const sgr = t.transition(DEFAULT_STYLE, id);
+    expect(sgr).toContain('48;5;');
+    expect(sgr).not.toContain('48;2;');
+  });
+
+  test('level 1 emits basic 16-color codes for RGB', () => {
+    const t = new StyleTable(1);
+    // Bright red (255,0,0) should map to basic color 91 (bright red fg)
+    const id = t.intern(0, ColorMode.RGB, 0xff0000, ColorMode.Default, 0);
+    const sgr = t.transition(DEFAULT_STYLE, id);
+    // Should NOT contain extended color sequences
+    expect(sgr).not.toContain('38;2;');
+    expect(sgr).not.toContain('38;5;');
+    // Should contain a basic fg code (30-37 or 90-97)
+    expect(sgr).toMatch(/(?:^|\[|;)(3[0-7]|9[0-7])(?:;|m)/);
+
+  });
+
+  test('level 0 emits default color for RGB', () => {
+    const t = new StyleTable(0);
+    const id = t.intern(0, ColorMode.RGB, 0xff0000, ColorMode.Default, 0);
+    const sgr = t.transition(DEFAULT_STYLE, id);
+    // Should reset to default fg (39) since no color supported
+    expect(sgr).toContain('39');
+    expect(sgr).not.toContain('38;');
+  });
+
+  test('palette colors pass through regardless of level', () => {
+    const t = new StyleTable(1);
+    const id = t.intern(0, ColorMode.Palette, 196, ColorMode.Default, 0);
+    const sgr = t.transition(DEFAULT_STYLE, id);
+    expect(sgr).toContain('38;5;196');
+  });
+});

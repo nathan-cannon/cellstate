@@ -262,8 +262,10 @@ describe('stringDisplayWidth grapheme clusters', () => {
     expect(stringDisplayWidth('👨\u200D👩\u200D👧')).toBe(2);
   });
 
-  it('skin tone on non-emoji (should not cluster)', () => {
-    expect(stringDisplayWidth('A\u{1F3FD}')).toBe(3);
+  it('skin tone on non-emoji clusters as single grapheme', () => {
+    // Intl.Segmenter treats A + skin tone as one grapheme cluster.
+    // The cluster is not an emoji, so width = first non-zero-width cp = A = 1.
+    expect(stringDisplayWidth('A\u{1F3FD}')).toBe(1);
   });
 });
 
@@ -304,5 +306,41 @@ describe('stringDisplayWidth with VS16', () => {
     expect(stringDisplayWidth('hi☀\uFE0F')).toBe(4);
     // "☀️☀️" = 2 + 2 = 4
     expect(stringDisplayWidth('☀\uFE0F☀\uFE0F')).toBe(4);
+  });
+});
+
+describe('grapheme-aware emoji widths', () => {
+  it('common emoji are width 2', () => {
+    expect(stringDisplayWidth('😀')).toBe(2);
+  });
+
+  it('family ZWJ sequence is width 2', () => {
+    expect(stringDisplayWidth('👨‍👩‍👧‍👦')).toBe(2);
+  });
+
+  it('flag emoji is width 2', () => {
+    expect(stringDisplayWidth('🇯🇵')).toBe(2);
+  });
+
+  it('skin tone modifier emoji is width 2', () => {
+    expect(stringDisplayWidth('👍🏽')).toBe(2);
+  });
+
+  it('east asian ambiguous (⚠ U+26A0) is width 1', () => {
+    expect(charDisplayWidth(0x26a0)).toBe(1);
+    expect(stringDisplayWidth('⚠')).toBe(1);
+  });
+
+  it('stringDisplayWidth agrees with charDisplayWidth for single codepoints', () => {
+    const testCps = [
+      'a'.codePointAt(0)!, // ASCII
+      '你'.codePointAt(0)!, // CJK
+      '😀'.codePointAt(0)!, // Emoji
+      0x0301, // Combining mark
+    ];
+    for (const cp of testCps) {
+      const str = String.fromCodePoint(cp);
+      expect(stringDisplayWidth(str)).toBe(charDisplayWidth(cp));
+    }
   });
 });

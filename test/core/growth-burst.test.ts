@@ -30,6 +30,7 @@ import {
 import {
   diffBuffers,
   serializeAll,
+  InlineCursor,
 } from '../../src/core/emit.js';
 
 // --- Helpers ---
@@ -270,10 +271,14 @@ describe('growth burst — unit tests', () => {
     const frontStart = Math.max(0, front.height - viewportRows);
     const backVp = viewportSlice(back, backStart, viewportRows);
     const frontVp = viewportSlice(front, frontStart, viewportRows);
-    const patch = diffBuffers(frontVp, backVp, tables.st, tables.ct, tables.lt, false);
+    const diffCursor = new InlineCursor(0, 0, backVp.width);
+    diffBuffers(frontVp, backVp, tables.st, tables.ct, tables.lt, false, diffCursor);
+    const patch = diffCursor.output;
 
     // Full serialize for comparison
-    const fullBackSize = serializeAll(back, tables.st, tables.ct, tables.lt, false).output.length;
+    const fullCursor = new InlineCursor(0, 0, back.width);
+    serializeAll(back, tables.st, tables.ct, tables.lt, false, fullCursor);
+    const fullBackSize = fullCursor.output.length;
     expect(patch.length).toBeLessThanOrEqual(fullBackSize);
   });
 });

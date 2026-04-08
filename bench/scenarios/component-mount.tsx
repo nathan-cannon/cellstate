@@ -9,7 +9,7 @@ import { mountRoot, setFlexNodeFactory } from '../../src/core/reconciler.js';
 import { createFlexNodeFactory } from '../../src/layout/yoga-flex.js';
 import { paintTree } from '../../src/core/paint.js';
 import { createCellBuffer, type CellBuffer } from '../../src/core/cell-buffer.js';
-import { diffBuffers } from '../../src/core/emit.js';
+import { diffBuffers, InlineCursor } from '../../src/core/emit.js';
 import { viewportSlice, expandDamageForShrink } from '../../src/core/cell-buffer.js';
 import { CharTable } from '../../src/core/char-table.js';
 import { StyleTable } from '../../src/core/style-table.js';
@@ -89,8 +89,9 @@ function runPipeline(
   const frontStart = Math.max(0, emitFront.height - ROWS);
   const backVp = viewportSlice(backBuf, backStart, ROWS);
   const frontVp = viewportSlice(emitFront, frontStart, ROWS);
-  const patch = diffBuffers(frontVp, backVp, styleTable, charTable, linkTable, false);
-  return { backBuf, output: patch };
+  const cursor = new InlineCursor(0, 0, backVp.width);
+  diffBuffers(frontVp, backVp, styleTable, charTable, linkTable, false, cursor);
+  return { backBuf, output: cursor.output };
 }
 
 let latestRoot: TNode | null = null;
@@ -217,7 +218,8 @@ export async function runComponentMount(): Promise<void> {
       const fStart = Math.max(0, frontBuf.height - ROWS);
       const bVp = viewportSlice(buf, bStart, ROWS);
       const fVp = viewportSlice(frontBuf, fStart, ROWS);
-      diffBuffers(fVp, bVp, styleTable, charTable, linkTable, false);
+      const cursor2 = new InlineCursor(0, 0, bVp.width);
+      diffBuffers(fVp, bVp, styleTable, charTable, linkTable, false, cursor2);
       frontBuf = buf;
       const t1 = performance.now();
       updateLatencies.push(t1 - t0);

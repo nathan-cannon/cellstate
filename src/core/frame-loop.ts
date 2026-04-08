@@ -15,11 +15,9 @@ import { paintTree } from './paint.js';
 import {
   type CellBuffer,
   createCellBuffer,
-  clearBuffer,
   resizeBuffer,
   lastNonBlankRow,
   viewportSlice,
-  expandDamageForShrink,
 } from './cell-buffer.js';
 import { CharTable } from './char-table.js';
 import { StyleTable } from './style-table.js';
@@ -27,15 +25,16 @@ import { LinkTable } from './link-table.js';
 import {
   diffBuffers,
   serializeAll,
-  serializeRowRange,
   serializeNewRows,
   serializeRowsForExit,
+  InlineCursor,
 } from './emit.js';
 import { readCell, WIDE_WIDTH, CONTINUATION_WIDTH } from './cell-buffer.js';
 import { mountRoot } from './reconciler.js';
 import { writeFileSync } from 'node:fs';
 import { detectCapabilities, type TerminalCapabilities } from './capabilities.js';
 import { createPerf, type Perf, type PerfSnapshot } from './perf.js';
+import chalk from 'chalk';
 
 export interface FrameLoopOptions {
   /** Override detected terminal capabilities. */
@@ -113,9 +112,24 @@ export function createFrameLoop(
   const DEC_2026_OFF = caps.synchronizedOutput ? '\x1b[?2026l' : '';
   const hyperlinksEnabled = caps.hyperlinks ?? false;
 
+  // --- Color level detection ---
+  // Derive from chalk.level for real TTYs. Boost to match detected caps
+  // since chalk can't probe a mock/non-standard stream.
+  let colorLevel = chalk.level;
+  if (caps.truecolor && colorLevel < 3) colorLevel = 3;
+  else if (!isTTY) colorLevel = 3; // piped output: preserve full color
+  // Apply tmux clamping: tmux often doesn't pass through truecolor
+  if (caps.multiplexer === 'tmux' && colorLevel > 2) {
+    colorLevel = 2;
+  }
+  // Apply VS Code boost: xterm.js supports truecolor but doesn't always advertise
+  if (caps.terminalName?.includes('vscode') && colorLevel === 2) {
+    colorLevel = 3;
+  }
+
   // --- Interning tables (session lifetime) ---
   const charTable = new CharTable();
-  const styleTable = new StyleTable();
+  const styleTable = new StyleTable(colorLevel);
   const linkTable = new LinkTable();
 
   // --- Frame state ---
@@ -131,14 +145,20 @@ export function createFrameLoop(
   let drainListener: (() => void) | null = null;
   let sigcontListener: (() => void) | null = null;
   let isFirstFrame = true;
-  let scrollbackRows = 0;
   let contaminated = false;
-  /** When true, the next full-redraw frame prepends an erase-screen sequence
-   *  inside the atomic BSU/ESU block so old content stays visible until the
-   *  new frame swaps in atomically. */
-  let eraseOnNextFrame = false;
   /** Viewport rows from the most recent processFrame, for getGrid(). */
   let lastViewportRows = 0;
+
+  /** Cursor position at end of previous frame, relative to content origin.
+   *  null before first frame.
+   *  INVARIANT: nothing writes to stdout between frames. patchConsole
+   *  redirects console.* to stderr. If any stdout write occurs between
+   *  frames, cursorPark will be stale and output will be misaligned.
+   *  The only recovery is setting contaminated = true. */
+  let cursorPark: { col: number; row: number } | null = null;
+
+  /** Content height (in rows) from the most recent frame. */
+  let lastFrameHeight = 0;
 
   // --- Buffer management ---
 
@@ -155,69 +175,60 @@ export function createFrameLoop(
     return buf;
   }
 
-  // --- Full-redraw path ---
+  const ESC = '\x1b[';
 
   /**
-   * Full redraw: setup scrollback (pre-paint + push), viewport redraw.
-   * Used for first frame, resize, stale scrollback, and contamination.
-   * Emits a single stdout.write() inside one atomic BSU/ESU block.
-   * The erase sequence is only included when eraseOnNextFrame is true.
+   * Emit the full content of backBuffer using serializeAll, park the cursor,
+   * and update frame state. Used by FIRST FRAME and CONTAMINATED paths.
+   * When erase is true, prepends the clear-screen sequence.
    */
-  function handleFullRedraw(
+  function emitFullContent(
     backBuffer: CellBuffer,
-    desiredScrollback: number,
-    rows: number,
+    contentHeight: number,
+    viewportRows: number,
+    erase: boolean,
   ): void {
-    scrollbackRows = 0;
+    const cursor = new InlineCursor(0, 0, backBuffer.width);
 
-    // --- Erase (conditional) ---
-    const erase = eraseOnNextFrame ? CLEAR_SCREEN_SCROLLBACK_HOME : '';
-    eraseOnNextFrame = false;
-
-    // --- Scrollback setup ---
-    const scrollNeeded = desiredScrollback;
-    let scrollSeq = '';
-
-    if (scrollNeeded > 0) {
-      let offset = 0;
-      let remaining = scrollNeeded;
-
-      perf.timeStart('serialize');
-      while (remaining > 0) {
-        const batch = Math.min(remaining, rows);
-
-        scrollSeq += '\x1b[H';
-        scrollSeq += serializeRowRange(backBuffer, offset, offset + batch, styleTable, charTable, linkTable, hyperlinksEnabled).output;
-
-        scrollSeq += `\x1b[${rows};1H`;
-        scrollSeq += '\n'.repeat(batch);
-
-        offset += batch;
-        remaining -= batch;
-      }
-      perf.timeEnd('serialize');
-      scrollbackRows = desiredScrollback;
-    }
-
-    // --- Viewport redraw ---
-    const vpSlice = viewportSlice(backBuffer, scrollbackRows, rows);
     perf.timeStart('serialize');
-    const body = serializeAll(vpSlice, styleTable, charTable, linkTable, hyperlinksEnabled);
+    serializeAll(backBuffer, styleTable, charTable, linkTable, hyperlinksEnabled, cursor);
     perf.timeEnd('serialize');
-    const redrawSeq = '\x1b[H\x1b[0m' + body.output;
 
-    // Single atomic BSU/ESU block: erase + cursor hide + scroll + viewport
-    const frame = DEC_2026_ON + erase + CURSOR_HIDE + scrollSeq + redrawSeq + DEC_2026_OFF;
-    perf.count('bytesWritten', frame.length);
-    perf.count('bytesFullRedraw', frame.length);
+    // Park through the cursor
+    cursor.moveTo(0, contentHeight - 1);
+    if (contentHeight < viewportRows) cursor.newline();
+    cursorPark = { col: cursor.col, row: cursor.row };
+
+    let output = DEC_2026_ON;
+    if (erase) output += CLEAR_SCREEN_SCROLLBACK_HOME;
+    output += CURSOR_HIDE;
+    output += cursor.output;
+    output += DEC_2026_OFF;
+
+    perf.count('bytesWritten', output.length);
+    perf.count('bytesFullRedraw', output.length);
     perf.timeStart('write');
-    const ok = stdout.write(frame);
+    const ok = stdout.write(output);
     perf.timeEnd('write');
     if (!ok) { isFlushing = true; perf.count('drainWaits'); }
 
-    // Set front buffer
+    lastFrameHeight = contentHeight;
     spareRef = frontRef;
     frontRef = backBuffer;
+  }
+
+  /**
+   * Compute how many top rows are unreachable (in terminal scrollback).
+   * If content filled or exceeded the viewport last frame AND the cursor
+   * was parked past the viewport bottom, the park \r\n scrolled 1 extra
+   * row into scrollback.
+   */
+  function computeUnreachableRows(viewportRows: number): number {
+    if (!cursorPark) return 0;
+    const contentScrollback = Math.max(0, lastFrameHeight - viewportRows);
+    const parkScreenRow = cursorPark.row - contentScrollback;
+    const parkingScrollOffset = parkScreenRow >= viewportRows ? 1 : 0;
+    return contentScrollback + parkingScrollOffset;
   }
 
   // --- Non-TTY frame processing (piped output) ---
@@ -262,8 +273,8 @@ export function createFrameLoop(
 
     perf.count('frames');
     const cols = stdout.columns ?? 80;
-    const rows = stdout.rows ?? 24;
-    lastViewportRows = rows;
+    const viewportRows = stdout.rows ?? 24;
+    lastViewportRows = viewportRows;
 
     perf.timeStart('layout');
     root.flexNode!.setWidth(cols);
@@ -273,45 +284,36 @@ export function createFrameLoop(
     const ch = root.flexNode!.getComputedHeight();
     const cw = root.flexNode!.getComputedWidth();
 
-    // --- Yoga dimension validation ──────────────────────────────────────
-    // NaN/Infinity can escape Yoga during rapid resize; NaN <= 0 is false
-    // in JS so the existing ch <= 0 guard doesn't catch it. Validate both
-    // axes before any allocation.
+    // --- Degenerate: bad yoga dimensions ---
     if (!Number.isFinite(ch) || ch < 0 || !Number.isFinite(cw) || cw < 0) {
       if (process.env.DEBUG) {
         process.stderr.write(
           `[FRAME] bad yoga dimensions: width=${cw} height=${ch}\n`,
         );
       }
-      scrollbackRows = 0;
-      eraseOnNextFrame = false;
-      contaminated = false;
+      contaminated = true;
+      cursorPark = null;
+      lastFrameHeight = 0;
+      frontRef = null;
       isFirstFrame = false;
-      const output = DEC_2026_ON + CLEAR_SCREEN_SCROLLBACK_HOME + CURSOR_HIDE + DEC_2026_OFF;
+      const output = DEC_2026_ON + CURSOR_HIDE + DEC_2026_OFF;
       perf.timeStart('write');
       const ok = stdout.write(output);
       perf.timeEnd('write');
       perf.count('bytesWritten', output.length);
       if (!ok) { isFlushing = true; perf.count('drainWaits'); }
-      frontRef = null;
       return;
     }
 
-    // --- Full-redraw gates (checked before classify) ---
-
-    const needsFullRedraw = isFirstFrame || frontRef === null || contaminated;
-    if (needsFullRedraw) {
-      // First frame and contamination both require an erase
-      if (isFirstFrame || contaminated) {
-        eraseOnNextFrame = true;
-      }
-      isFirstFrame = false;
-      contaminated = false;
-      perf.count('framesFullRedraw');
-
-      if (ch <= 0) {
-        scrollbackRows = 0;
-        eraseOnNextFrame = false;
+    // --- Degenerate: zero content ---
+    if (ch <= 0) {
+      if (isFirstFrame || contaminated || frontRef === null || cursorPark === null) {
+        // Nothing to show — clear screen and reset
+        contaminated = false;
+        isFirstFrame = false;
+        cursorPark = null;
+        lastFrameHeight = 0;
+        frontRef = null;
         const output = DEC_2026_ON + CLEAR_SCREEN_SCROLLBACK_HOME + CURSOR_HIDE + DEC_2026_OFF;
         perf.timeStart('write');
         const ok = stdout.write(output);
@@ -319,44 +321,50 @@ export function createFrameLoop(
         perf.count('bytesWritten', output.length);
         perf.count('bytesFullRedraw', output.length);
         if (!ok) { isFlushing = true; perf.count('drainWaits'); }
-        frontRef = null;
-        return;
       }
+      return;
+    }
 
-      const bufHeight = Math.max(ch, rows);
+    // --- CONTAMINATED (SIGCONT/resize) — check BEFORE first frame ---
+    if (contaminated) {
+      contaminated = false;
+      perf.count('framesFullRedraw');
+
+      const bufHeight = Math.max(ch, 1);
       perf.timeStart('rasterize');
       const backBuffer = prepareBackBuffer(cols, bufHeight);
       paintTree(root, backBuffer, null, charTable, styleTable, linkTable, 0, perfOrUndef);
       perf.timeEnd('rasterize');
-      const actualHeight = lastNonBlankRow(backBuffer) + 1;
-      const desiredScrollback = Math.max(0, actualHeight - rows);
+      const contentHeight = lastNonBlankRow(backBuffer) + 1;
 
-      handleFullRedraw(backBuffer, desiredScrollback, rows);
+      emitFullContent(backBuffer, contentHeight, viewportRows, true);
+      isFirstFrame = false;
+      return;
+    }
+
+    // --- FIRST FRAME ---
+    if (isFirstFrame || frontRef === null || cursorPark === null) {
+      isFirstFrame = false;
+      perf.count('framesFullRedraw');
+
+      const bufHeight = Math.max(ch, 1);
+      perf.timeStart('rasterize');
+      const backBuffer = prepareBackBuffer(cols, bufHeight);
+      paintTree(root, backBuffer, null, charTable, styleTable, linkTable, 0, perfOrUndef);
+      perf.timeEnd('rasterize');
+      const contentHeight = lastNonBlankRow(backBuffer) + 1;
+
+      emitFullContent(backBuffer, contentHeight, viewportRows, false);
       return;
     }
 
     // --- Paint into back buffer ---
-    const bufHeight = Math.max(ch, rows);
+    const bufHeight = Math.max(ch, 1);
     perf.timeStart('rasterize');
     const backBuffer = prepareBackBuffer(cols, bufHeight);
     paintTree(root, backBuffer, frontRef, charTable, styleTable, linkTable, 0, perfOrUndef);
     perf.timeEnd('rasterize');
-    const actualHeight = lastNonBlankRow(backBuffer) + 1;
-    const desiredScrollback = Math.max(0, actualHeight - rows);
-
-
-    // --- Stale scrollback → full redraw ---
-    if (desiredScrollback < scrollbackRows) {
-      perf.count('framesFullRedraw');
-      eraseOnNextFrame = true;
-      handleFullRedraw(backBuffer, desiredScrollback, rows);
-      return;
-    }
-
-    // --- Expand damage for content shrink ---
-    // When content shrinks, rows that are blank in back but had content in
-    // front need to be within the damage bounds for the diff to emit erase.
-    expandDamageForShrink(frontRef!, backBuffer);
+    const contentHeight = lastNonBlankRow(backBuffer) + 1;
 
     // --- Log damage dimensions ---
     if (process.env.DEBUG && backBuffer.damageBox) {
@@ -368,37 +376,83 @@ export function createFrameLoop(
       process.stderr.write('[FRAME] damage=none\n');
     }
 
-    // --- Unified emit path ---
+    // --- Compute unreachable rows ---
+    const unreachableRows = computeUnreachableRows(viewportRows);
 
-    const growthPush = desiredScrollback - scrollbackRows;
-    const isGrowing = growthPush > 0;
-
-    // Track damage perf counters
+    // --- Track damage perf counters ---
     if (perfOrUndef && backBuffer.damageBox) {
       const d = backBuffer.damageBox;
       const damageCells = (d.maxRow - d.minRow + 1) * (d.maxCol - d.minCol + 1);
-      const viewportCells = rows * cols;
+      const viewportCells = viewportRows * cols;
       perfOrUndef.count('damageCells', damageCells);
       perfOrUndef.count('damageSkippedCells', Math.max(0, viewportCells - damageCells));
     }
 
-    if (!isGrowing) {
-      // --- No growth: diff viewport ---
+    // --- Unreachable damage guard ---
+    // If any unreachable rows exist (content in terminal scrollback), check
+    // whether the current frame would need to touch them. If so, fall back
+    // to CONTAMINATED path (full reset).
+    if (unreachableRows > 0) {
+      // For shrink: cursor positioning math for orphan erase assumes no
+      // scrollback. Any shrink with scrollback needs a full reset.
+      const shrinkNeedsReset = contentHeight < lastFrameHeight;
+
+      // For update/growth: check if back buffer damage falls in unreachable rows.
+      // Only check backBuffer damage — frontRef damage is from the previous
+      // frame's rasterization and doesn't reflect current changes.
+      const damageMin = backBuffer.damageBox?.minRow ?? contentHeight;
+      const damageNeedsReset = damageMin < unreachableRows;
+
+      if (shrinkNeedsReset || damageNeedsReset) {
+        if (process.env.DEBUG) {
+          process.stderr.write(
+            `[FRAME] full reset: unreachable rows=${unreachableRows}` +
+            (shrinkNeedsReset ? ' (shrink)' : ` (damage at row ${damageMin})`) + '\n',
+          );
+        }
+        perf.count('framesFullRedraw');
+        contaminated = true;
+        processFrame(root);
+        return;
+      }
+    }
+
+    // --- Classify: UPDATE, GROWTH, or SHRINK ---
+
+    if (contentHeight === lastFrameHeight) {
+      // --- UPDATE (same height) ---
       perf.count('framesUpdate');
-      const backVp = viewportSlice(backBuffer, desiredScrollback, rows);
-      const frontVp = viewportSlice(frontRef!, scrollbackRows, rows);
-      const patch = diffBuffers(frontVp, backVp, styleTable, charTable, linkTable, hyperlinksEnabled, perfOrUndef);
+
+      // Diff only the reachable portion (rows visible on screen).
+      // With scrollback, unreachable rows are in terminal scrollback and
+      // can't be reached by relative cursor moves.
+      const reachableStart = unreachableRows;
+      const frontSlice = viewportSlice(frontRef!, reachableStart, contentHeight - reachableStart);
+      const backSlice = viewportSlice(backBuffer, reachableStart, contentHeight - reachableStart);
+
+      const cursor = new InlineCursor(cursorPark!.col, cursorPark!.row, cols);
+      cursor.moveTo(0, 0); // preamble: move from park to content origin
+
+      perf.timeStart('serialize');
+      const preLen = cursor.output.length;
+      diffBuffers(frontSlice, backSlice, styleTable, charTable, linkTable, hyperlinksEnabled, cursor, perfOrUndef);
+      perf.timeEnd('serialize');
 
       spareRef = frontRef;
       frontRef = backBuffer;
-      scrollbackRows = desiredScrollback;
+      lastFrameHeight = contentHeight;
 
-      if (patch.length === 0) {
+      if (cursor.output.length === preLen) {
         perf.count('framesSkipped');
         return;
       }
 
-      const frame = DEC_2026_ON + '\x1b[H' + patch + DEC_2026_OFF;
+      // Park
+      cursor.moveTo(0, contentHeight - 1);
+      if (contentHeight < viewportRows) cursor.newline();
+      cursorPark = { col: cursor.col, row: cursor.row };
+
+      const frame = DEC_2026_ON + CURSOR_HIDE + cursor.output + DEC_2026_OFF;
       perf.count('bytesWritten', frame.length);
       perf.count('bytesUpdate', frame.length);
       perf.timeStart('write');
@@ -408,66 +462,84 @@ export function createFrameLoop(
       return;
     }
 
-    // --- Growth path ---
-    perf.count('framesGrowth');
-    if (perfOrUndef) perfOrUndef.count('growthFrames');
+    if (contentHeight > lastFrameHeight) {
+      // --- GROWTH (taller) ---
+      perf.count('framesGrowth');
+      if (perfOrUndef) perfOrUndef.count('growthFrames');
 
-    // --- Scrollback damage guard ---
-    // If any damage falls within rows already in scrollback, those rows are
-    // unreachable — the terminal doesn't let us edit scrollback in place.
-    // Fall back to a full redraw so the content is correct everywhere.
-    if (backBuffer.damageBox && scrollbackRows > 0 &&
-        backBuffer.damageBox.minRow < scrollbackRows) {
-      perf.count('framesFullRedraw');
-      eraseOnNextFrame = true;
-      handleFullRedraw(backBuffer, desiredScrollback, rows);
+      const cursor = new InlineCursor(cursorPark!.col, cursorPark!.row, cols);
+      cursor.moveTo(0, 0); // preamble: move from park to content origin
+
+      perf.timeStart('serialize');
+
+      // Diff overlapping reachable rows only. With scrollback, unreachable
+      // rows can't be reached by relative cursor moves.
+      const reachableStart = unreachableRows;
+      const overlapEnd = lastFrameHeight;
+      const reachableOverlap = overlapEnd - reachableStart;
+      const frontSlice = viewportSlice(frontRef!, reachableStart, reachableOverlap);
+      const backSlice = viewportSlice(backBuffer, reachableStart, reachableOverlap);
+      diffBuffers(frontSlice, backSlice, styleTable, charTable, linkTable, hyperlinksEnabled, cursor, perfOrUndef);
+
+      // Move to last existing content row, then advance to new rows
+      cursor.moveTo(0, lastFrameHeight - 1);
+      cursor.newline();
+      serializeNewRows(backBuffer, lastFrameHeight, contentHeight, styleTable, charTable, linkTable, hyperlinksEnabled, cursor, perfOrUndef);
+
+      perf.timeEnd('serialize');
+
+      // Park
+      cursor.moveTo(0, contentHeight - 1);
+      if (contentHeight < viewportRows) cursor.newline();
+      cursorPark = { col: cursor.col, row: cursor.row };
+
+      lastFrameHeight = contentHeight;
+      spareRef = frontRef;
+      frontRef = backBuffer;
+
+      const frame = DEC_2026_ON + CURSOR_HIDE + cursor.output + DEC_2026_OFF;
+      perf.count('bytesWritten', frame.length);
+      perf.count('bytesGrowth', frame.length);
+      perf.timeStart('write');
+      const ok = stdout.write(frame);
+      perf.timeEnd('write');
+      if (!ok) { isFlushing = true; perf.count('drainWaits'); }
       return;
     }
 
-    let output = '';
+    // --- SHRINK (shorter) ---
+    perf.count('framesUpdate');
 
-    // Growth push — serialize new scrollback rows + emit newlines
+    const cursor = new InlineCursor(cursorPark!.col, cursorPark!.row, cols);
+    cursor.moveTo(0, 0); // preamble: move from park to content origin
+
     perf.timeStart('serialize');
-    let offset = scrollbackRows;
-    let remaining = growthPush;
-    while (remaining > 0) {
-      const batch = Math.min(remaining, rows);
-      output += '\x1b[H';
-      output += serializeRowRange(backBuffer, offset, offset + batch, styleTable, charTable, linkTable, hyperlinksEnabled).output;
-      output += `\x1b[${rows};1H`;
-      output += '\n'.repeat(batch);
-      offset += batch;
-      remaining -= batch;
-    }
-    scrollbackRows = desiredScrollback;
 
-    // Step 4: Diff the viewport against the shifted front.
-    // After the growth push, the terminal shows frontRef content shifted up
-    // by growthPush rows. The damage-scoped diff handles:
-    // - Pure appends (only new rows damaged → diff finds nothing in overlap)
-    // - Mixed changes (damage covers affected region → diff processes only that)
-    if (desiredScrollback < frontRef!.height && frontRef!.width === cols) {
-      const frontVp = viewportSlice(frontRef!, desiredScrollback, rows);
-      const backVp = viewportSlice(backBuffer, desiredScrollback, rows);
-      const patch = diffBuffers(frontVp, backVp, styleTable, charTable, linkTable, hyperlinksEnabled, perfOrUndef);
-      if (patch.length > 0) {
-        output += '\x1b[H' + patch;
-      }
-    } else {
-      // Shifted front exceeds bounds — full viewport serialize
-      const vpSlice = viewportSlice(backBuffer, scrollbackRows, rows);
-      const body = serializeAll(vpSlice, styleTable, charTable, linkTable, hyperlinksEnabled);
-      output += '\x1b[H\x1b[0m' + body.output;
+    // Diff overlapping rows (0..contentHeight-1) only
+    const frontSlice = viewportSlice(frontRef!, 0, contentHeight);
+    const backSlice = viewportSlice(backBuffer, 0, contentHeight);
+    diffBuffers(frontSlice, backSlice, styleTable, charTable, linkTable, hyperlinksEnabled, cursor, perfOrUndef);
+
+    // Erase orphan rows
+    for (let r = contentHeight; r < lastFrameHeight; r++) {
+      cursor.moveTo(0, r);
+      cursor.writeRaw(`${ESC}2K`);
     }
+
     perf.timeEnd('serialize');
 
-    const frame = DEC_2026_ON + output + DEC_2026_OFF;
-    perf.count('bytesWritten', frame.length);
-    perf.count('bytesGrowth', frame.length);
+    // Park
+    cursor.moveTo(0, contentHeight - 1);
+    if (contentHeight < viewportRows) cursor.newline();
+    cursorPark = { col: cursor.col, row: cursor.row };
 
+    lastFrameHeight = contentHeight;
     spareRef = frontRef;
     frontRef = backBuffer;
 
+    const frame = DEC_2026_ON + CURSOR_HIDE + cursor.output + DEC_2026_OFF;
+    perf.count('bytesWritten', frame.length);
+    perf.count('bytesUpdate', frame.length);
     perf.timeStart('write');
     const ok = stdout.write(frame);
     perf.timeEnd('write');
@@ -564,7 +636,8 @@ export function createFrameLoop(
     pendingRoot = null;
 
     contaminated = true;
-    eraseOnNextFrame = true;
+    cursorPark = null;
+    lastFrameHeight = 0;
 
     // Terminal may restore cursor visibility on resume
     stdout.write(CURSOR_HIDE);
@@ -576,8 +649,6 @@ export function createFrameLoop(
   }
 
   function onResize(): void {
-    const oldScrollback = scrollbackRows;
-
     // Cancel any pending coalesced frame — resize supersedes it
     if (frameTimer !== null) {
       clearTimeout(frameTimer);
@@ -594,9 +665,9 @@ export function createFrameLoop(
     // Save front for reuse as spare, then clear
     spareRef = frontRef;
     frontRef = null;
-    scrollbackRows = 0;
+    cursorPark = null;
+    lastFrameHeight = 0;
     contaminated = true; // Forces full-redraw on next processFrame
-    eraseOnNextFrame = true; // Defer erase into the atomic output block
     isFirstFrame = false;
 
     if (lastRoot !== null) {
@@ -604,14 +675,11 @@ export function createFrameLoop(
         const cols = stdout.columns ?? 80;
         const rows = stdout.rows ?? 24;
         process.stderr.write(
-          `[RESIZE] cols=${cols} rows=${rows} ` +
-          `oldScrollback=${oldScrollback}\n`
+          `[RESIZE] cols=${cols} rows=${rows}\n`
         );
       }
 
-      // Process immediately so scrollbackRows is updated synchronously
-      // (tests check getScrollbackLines() right after resize).
-      // Bypass throttling — resize needs immediate synchronous rendering.
+      // Process immediately — resize needs immediate synchronous rendering.
       processFrame(lastRoot);
       lastFrameTime = performance.now();
     }
@@ -685,7 +753,6 @@ export function createFrameLoop(
       }
 
       const cols = stdout.columns ?? 80;
-      const rows = stdout.rows ?? 24;
 
       if (lastRoot !== null) {
         try {
@@ -704,10 +771,10 @@ export function createFrameLoop(
               CURSOR_SHOW,
           );
         } catch {
-          writeFileSync(1, `\x1b[${rows};1H\n` + CURSOR_SHOW);
+          writeFileSync(1, CLEAR_SCREEN_SCROLLBACK_HOME + CURSOR_SHOW);
         }
       } else {
-        writeFileSync(1, `\x1b[${rows};1H\n` + CURSOR_SHOW);
+        writeFileSync(1, CLEAR_SCREEN_SCROLLBACK_HOME + CURSOR_SHOW);
       }
     },
 
@@ -720,14 +787,16 @@ export function createFrameLoop(
     /** @deprecated Use getBuffer() with getCharTable()/getStyleTable() instead. */
     getGrid(): CellGrid | null {
       if (!frontRef) return null;
-      const vpStart = Math.max(0, scrollbackRows);
-      const vpRows = Math.min(lastViewportRows || frontRef.height, frontRef.height - vpStart);
-      const buf = viewportSlice(frontRef, vpStart, vpRows);
+      const vp = lastViewportRows || frontRef.height;
+      const scrollback = Math.max(0, lastFrameHeight - vp);
+      const vpRows = Math.min(vp, frontRef.height - scrollback);
+      const buf = viewportSlice(frontRef, scrollback, vpRows);
+      const width = buf.width;
       // Inline CellBuffer → CellGrid conversion (was compat-bridge.ts)
       const cells: Cell[][] = [];
       for (let r = 0; r < buf.height; r++) {
         const row: Cell[] = [];
-        for (let c = 0; c < buf.width; c++) {
+        for (let c = 0; c < width; c++) {
           const packed = readCell(buf, r, c)!;
           const ch = charTable.resolve(packed.charId);
           const style = styleTable.resolve(packed.styleId);
@@ -745,7 +814,19 @@ export function createFrameLoop(
         }
         cells.push(row);
       }
-      return { cells, cursorRow: 0, cursorCol: 0, width: buf.width, height: buf.height };
+      // Pad to full viewport height with blank rows
+      const blankCell: Cell = {
+        char: ' ', width: 1,
+        fg: { mode: ColorMode.Default, value: 0 },
+        bg: { mode: ColorMode.Default, value: 0 },
+        attrs: 0,
+      };
+      while (cells.length < vp) {
+        const row: Cell[] = [];
+        for (let c = 0; c < width; c++) row.push({ ...blankCell });
+        cells.push(row);
+      }
+      return { cells, cursorRow: 0, cursorCol: 0, width, height: vp };
     },
 
     getBuffer(): CellBuffer | null {
@@ -764,8 +845,9 @@ export function createFrameLoop(
       return linkTable;
     },
 
+    /** @deprecated Derived from lastFrameHeight — scrollback is now tracked via cursorPark. */
     getScrollbackLines(): number {
-      return scrollbackRows;
+      return Math.max(0, lastFrameHeight - lastViewportRows);
     },
 
     dumpFrameLog(path: string): void {
@@ -773,7 +855,8 @@ export function createFrameLoop(
         ts: Date.now(),
         cols: stdout.columns ?? 80,
         rows: stdout.rows ?? 24,
-        scrollbackRows,
+        cursorPark,
+        lastFrameHeight,
         isFlushing,
         hasPendingRoot: pendingRoot !== null,
         hasLastRoot: lastRoot !== null,
