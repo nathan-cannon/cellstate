@@ -12,7 +12,7 @@
 
 CellState renders into the main terminal buffer with no alternate screen. Content scrolls naturally, persists after exit, and works with native terminal features like search, text selection, copy/paste, and scrollback.
 
-The tradeoff is that the renderer can't clear and redraw the screen on every frame. Once content scrolls into the terminal's scrollback buffer, it's unreachable. CellState tracks which cells are still in the viewport versus scrollback, diffs only what's visible, and falls back to a full redraw only when necessary.
+The tradeoff is that the renderer can't clear and redraw the screen on every frame. Once content scrolls into the terminal's scrollback buffer, it's unreachable. CellState uses relative cursor positioning and natural terminal scrolling, diffs only what's visible, and falls back to a full redraw only when necessary.
 
 Rendering cost scales with what changed, not total content size. Paint and diff stay fast regardless of conversation length. Frame coalescing merges rapid React commits into a single frame, and backpressure handling defers frames when stdout can't keep up.
 
@@ -24,7 +24,7 @@ CellState detects terminal capabilities at startup and adapts its output:
 - Plain styled text for piped (non-TTY) output
 - Clean recovery from Ctrl+Z suspension
 
-Unicode handling covers CJK characters, emoji, grapheme clusters, ZWJ sequences, and more, using display width tables from Unicode 17.0 data. Layout, paint, and diff all operate on terminal column widths, not string lengths.
+Unicode handling covers CJK characters, emoji, grapheme clusters, ZWJ sequences, and more, using display width derived from get-east-asian-width with grapheme segmentation for complex emoji and script clusters. Layout, paint, and diff all operate on terminal column widths, not string lengths.
  
 
 ## Install
