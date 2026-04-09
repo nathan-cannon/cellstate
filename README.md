@@ -8,16 +8,21 @@
   <a href="https://github.com/nathan-cannon/cellstate/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue" alt="License: MIT"></a>
 </p>
 
-## Overview
+CellState is a React terminal renderer with cell-level diffing and native scrollback. It renders into the main terminal buffer with no alternate screen. Content scrolls naturally, persists after exit, and works with native terminal features like search, text selection, copy/paste, and scrollback.
 
-CellState renders into the main terminal buffer with no alternate screen. Content scrolls naturally, persists after exit, and works with native terminal features like search, text selection, copy/paste, and scrollback.
+Streaming syntax-highlighted markdown into a 250-message conversation renders in under 10ms per frame. Frame coalescing merges rapid React commits into a single frame, and backpressure handling defers frames when stdout can't keep up.
 
-Rendering cost scales with what changed, not total content size. Paint and diff stay fast regardless of conversation length. Frame coalescing merges rapid React commits into a single frame, and backpressure handling defers frames when stdout can't keep up.
-
-CellState detects terminal capabilities at startup and adapts its output: synchronized output, OSC 8 hyperlinks, platform-specific clear sequences, non-TTY fallback, and clean Ctrl+Z recovery.
+CellState detects terminal capabilities at startup and adapts its output. Synchronized output, OSC 8 hyperlinks, platform-specific clear sequences, non-TTY fallback, and clean Ctrl+Z recovery all work automatically.
 
 Unicode handling covers CJK characters, emoji, grapheme clusters, ZWJ sequences, and variation selectors. Layout, paint, and diff all operate on terminal column widths, not string lengths.
- 
+
+---
+
+<p align="center"><img src="demo.gif" alt="CellState demo"></p>
+
+<p align="center"><em>CellState rendering a coding agent UI via OpenCode's serve API</em></p>
+
+---
 
 ## Install
 ```
