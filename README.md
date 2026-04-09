@@ -1,5 +1,5 @@
 <h1 align="center">CellState</h1>
-<p align="center"><strong>React terminal renderer with cell-level diffing. No alternate screen.</strong></p>
+<p align="center"><strong>React terminal renderer with cell-level diffing and native scrollback. No alternate screen.</strong></p>
 <p align="center">
   <a href="https://www.npmjs.com/package/cellstate"><img src="https://img.shields.io/npm/v/cellstate?color=crimson&logo=npm" alt="npm version"></a>
   <a href="https://github.com/nathan-cannon/cellstate/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/nathan-cannon/cellstate/test.yml?label=tests&logo=github" alt="Tests"></a>
