@@ -18,7 +18,7 @@ Unicode handling covers CJK characters, emoji, grapheme clusters, ZWJ sequences,
 
 ---
 
-<p align="center"><img src="demo.gif" alt="CellState demo"></p>
+<p align="center"><img src="demo.gif" width="1270" alt="CellState demo"></p>
 
 <p align="center"><em>CellState rendering a coding agent UI via OpenCode's serve API</em></p>
 
