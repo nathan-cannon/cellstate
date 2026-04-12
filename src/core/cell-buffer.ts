@@ -244,10 +244,42 @@ export function blitRegion(
     }
   }
 
-  // blitRegion does NOT expand damage — blitted content is identical in
-  // front and back, so the diff will find no changes.  Keeping damage tight
-  // ensures the unreachable-row pre-paint only triggers when actual content
-  // changes exist above the reachable line.
+  // Always expand damageBox so the diff engine re-checks blitted regions
+  // against the front buffer. This catches terminal-vs-buffer desync (e.g.
+  // a prior SHRINK frame's ESC[2K erased rows that the back buffer now
+  // re-blits identically). Crucially, we expand only damageBox — NOT
+  // paintDamageBox — so the unreachable-row guard in the frame loop
+  // doesn't interpret blits as "needs to be drawn" and force full redraws
+  // when content is in scrollback.
+  expandDamage(dst, effectiveDstRow, effectiveDstCol);
+  expandDamage(dst, effectiveDstRow + actualRows - 1, effectiveDstCol + actualCols - 1);
+}
+
+/**
+ * Fill a rectangle with blank cells AND expand damage to cover it. Used by
+ * the explicit-clear system to remove old node bounds when content moves or
+ * unmounts, so the diff engine sees the cleared cells.
+ */
+export function clearRegion(
+  buf: CellBuffer,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): void {
+  if (width <= 0 || height <= 0) return;
+  const x0 = Math.max(0, x);
+  const y0 = Math.max(0, y);
+  const x1 = Math.min(buf.width, x + width);
+  const y1 = Math.min(buf.height, y + height);
+  if (x0 >= x1 || y0 >= y1) return;
+  const w = buf.width;
+  for (let r = y0; r < y1; r++) {
+    const base = r * w;
+    buf.cellBulk.fill(BLANK_CELL_64, base + x0, base + x1);
+  }
+  expandDamage(buf, y0, x0);
+  expandDamage(buf, y1 - 1, x1 - 1);
 }
 
 export function shiftRows(
@@ -339,6 +371,7 @@ export function viewportSlice(
   if (actualRows <= 0) {
     return createCellBuffer(w, rows);
   }
+  // Slices are read by the diff engine only — paintDamageBox isn't needed.
   // Transform damageBox from full-buffer to slice coordinates
   let sliceDamage: DamageBox | null = null;
   if (buf.damageBox) {
@@ -364,50 +397,6 @@ export function viewportSlice(
     damageBox: sliceDamage,
   };
 }
-
-/**
- * Expand damage for content shrink.
- *
- * After incremental paint, rows that are neither painted nor blitted remain
- * zero-filled (blank) with no damage. When content shrinks, some of these
- * blank rows correspond to front-buffer rows that had content — the diff
- * engine needs them within the damage bounds to emit erase sequences.
- *
- * This is O(overlap_rows) in the scan and O(width) only for the rows that
- * actually need checking (rows outside current damage, non-blank in front).
- */
-export function expandDamageForShrink(front: CellBuffer, back: CellBuffer): void {
-  const overlap = Math.min(front.height, back.height);
-  const w = back.width;
-  if (front.width !== w) return;
-  for (let r = 0; r < overlap; r++) {
-    // Skip rows already within damage box
-    if (back.damageBox && r >= back.damageBox.minRow && r <= back.damageBox.maxRow) continue;
-    // Check if front row has any content
-    const base = r * w;
-    let frontHasContent = false;
-    for (let c = 0; c < w; c++) {
-      if (front.cellBulk[base + c] !== BLANK_CELL_64) {
-        frontHasContent = true;
-        break;
-      }
-    }
-    if (!frontHasContent) continue;
-    // Back row is blank but front had content → expand damage to include this row
-    let backIsBlank = true;
-    for (let c = 0; c < w; c++) {
-      if (back.cellBulk[base + c] !== BLANK_CELL_64) {
-        backIsBlank = false;
-        break;
-      }
-    }
-    if (backIsBlank) {
-      expandDamage(back, r, 0);
-      expandDamage(back, r, w - 1);
-    }
-  }
-}
-
 
 // --- Debug helpers ---
 

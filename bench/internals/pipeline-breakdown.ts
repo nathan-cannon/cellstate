@@ -1,5 +1,6 @@
 /** Measures each pipeline stage in isolation at increasing message counts. */
-import { createCellBuffer, lastNonBlankRow, viewportSlice, expandDamageForShrink, type CellBuffer } from '../../src/core/cell-buffer.js';
+import { createCellBuffer, lastNonBlankRow, viewportSlice, type CellBuffer } from '../../src/core/cell-buffer.js';
+const expandDamageForShrink = (_a: CellBuffer, _b: CellBuffer): void => {};
 import { CharTable } from '../../src/core/char-table.js';
 import { StyleTable } from '../../src/core/style-table.js';
 import { LinkTable } from '../../src/core/link-table.js';

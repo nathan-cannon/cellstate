@@ -13,11 +13,12 @@ import {
   type CellBuffer,
   writeCell,
   blitRegion,
+  clearRegion,
   NORMAL_WIDTH,
   WIDE_WIDTH,
   CONTINUATION_WIDTH,
 } from './cell-buffer.js';
-import { propagateDirty, clearAllDirty, drainAbsoluteFlag } from './dirty.js';
+import { propagateDirty, clearAllDirty } from './dirty.js';
 import type { Perf } from './perf.js';
 
 // --- Color parsing (ported from rasterizer.ts) ---
@@ -129,6 +130,31 @@ function resolveSegmentStyle(
 
 // --- Main paint function ---
 
+/** Clear the part of an old rect that the new rect doesn't cover. */
+function clearRectDifference(
+  buf: CellBuffer,
+  ox: number, oy: number, ow: number, oh: number,
+  nx: number, ny: number, nw: number, nh: number,
+): void {
+  if (ow <= 0 || oh <= 0) return;
+  // No overlap → clear the entire old rect.
+  if (nx >= ox + ow || nx + nw <= ox || ny >= oy + oh || ny + nh <= oy) {
+    clearRegion(buf, ox, oy, ow, oh);
+    return;
+  }
+  // Top strip.
+  if (oy < ny) clearRegion(buf, ox, oy, ow, ny - oy);
+  // Bottom strip.
+  if (oy + oh > ny + nh) clearRegion(buf, ox, ny + nh, ow, (oy + oh) - (ny + nh));
+  // Middle band y-range.
+  const midY = Math.max(oy, ny);
+  const midH = Math.min(oy + oh, ny + nh) - midY;
+  if (midH > 0) {
+    if (ox < nx) clearRegion(buf, ox, midY, nx - ox, midH);
+    if (ox + ow > nx + nw) clearRegion(buf, nx + nw, midY, (ox + ow) - (nx + nw), midH);
+  }
+}
+
 let movementDetected = false;
 
 export function paintTree(
@@ -141,18 +167,67 @@ export function paintTree(
   scrollOffset: number = 0,
   perf?: Perf,
 ): void {
-  // Absolute removal poisons all blitting for this frame
-  let front = frontBuffer;
-  if (drainAbsoluteFlag()) {
-    front = null;
-  }
-
   movementDetected = false;
-  walkNode(root, DEFAULT_RESOLVED, buffer, front, charTable, styleTable, linkTable, scrollOffset, false, perf, 0, 0);
+  // Pass 1 — clears only. Walks the tree, clears the rect-difference of any
+  // moved/resized node and processes _pendingClears from removed subtrees.
+  // Updates _prevBounds and propagates dirty for movement. NO painting.
+  walkClears(root, buffer, scrollOffset, 0, 0);
+  // Pass 2 — paint. With all clears already applied to the back buffer, no
+  // child can clobber a parent's painted content (e.g. a border row).
+  walkNode(root, DEFAULT_RESOLVED, buffer, frontBuffer, charTable, styleTable, linkTable, scrollOffset, false, perf, 0, 0);
   if (movementDetected && perf) {
     perf.count('layoutMovementFrames');
   }
   clearAllDirty(root);
+}
+
+function walkClears(
+  node: TNode,
+  buffer: CellBuffer,
+  scrollOffset: number,
+  parentAbsX: number,
+  parentAbsY: number,
+): void {
+  const fn = node.flexNode;
+  if (!fn) return; // legacy/test path has no Yoga state — pass 1 is a no-op
+  if (node.props.display === 'none') return;
+
+  const absX = parentAbsX + fn.getComputedLeft();
+  const absY = parentAbsY + fn.getComputedTop();
+  const w = fn.getComputedWidth();
+  const h = fn.getComputedHeight();
+
+  const prev = node._prevBounds;
+  let boundsMatch = false;
+  if (prev) {
+    boundsMatch = prev.x === absX && prev.y === absY && prev.width === w && prev.height === h;
+    if (!boundsMatch) {
+      movementDetected = true;
+      propagateDirty(node);
+      clearRectDifference(buffer, prev.x, prev.y - scrollOffset, prev.width, prev.height,
+        absX, absY - scrollOffset, w, h);
+    }
+  }
+  if (!boundsMatch) {
+    node._prevBounds = { x: absX, y: absY, width: w, height: h };
+  }
+
+  if (node._pendingClears && node._pendingClears.length > 0) {
+    for (const rect of node._pendingClears) {
+      clearRegion(buffer, rect.x, rect.y - scrollOffset, rect.width, rect.height);
+    }
+    node._pendingClears = undefined;
+  }
+
+  // Skip clean subtrees: if no React changes (_dirty=false), no detached
+  // children, and bounds matched, neither this node nor any descendant has
+  // moved or needs clearing. Dirty bubbles up via reconciler+propagateDirty,
+  // so a clean ancestor implies a clean subtree.
+  if (boundsMatch && !node._dirty && !node._childWasDetached) return;
+
+  for (const child of node.children) {
+    walkClears(child, buffer, scrollOffset, absX, absY);
+  }
 }
 
 function walkNode(
@@ -174,28 +249,16 @@ function walkNode(
   if (node.props.display === 'none') return;
 
   let absX: number, absY: number, w: number, h: number;
-  let boundsMatch = false;
 
   if (fn) {
-    // --- Yoga path: read computed values, track bounds ---
-    const relX = fn.getComputedLeft();
-    const relY = fn.getComputedTop();
-    w = fn.getComputedWidth();
-    h = fn.getComputedHeight();
-    absX = parentAbsX + relX;
-    absY = parentAbsY + relY;
-
-    const prev = node._prevBounds;
-    if (prev) {
-      boundsMatch = prev.x === absX && prev.y === absY && prev.width === w && prev.height === h;
-      if (!boundsMatch) {
-        movementDetected = true;
-        propagateDirty(node);
-      }
-    }
-    if (!boundsMatch) {
-      node._prevBounds = { x: absX, y: absY, width: w, height: h };
-    }
+    // --- Yoga path: pass 1 has already updated _prevBounds with current
+    // absolute position+size and propagated dirty for any movement. Just
+    // read it back. ---
+    const prev = node._prevBounds!;
+    absX = prev.x;
+    absY = prev.y;
+    w = prev.width;
+    h = prev.height;
   } else {
     // --- Legacy path: layout pre-set externally (unit tests) ---
     const l = node.layout!;
@@ -213,8 +276,10 @@ function walkNode(
     if (absY - effectiveOffset >= buffer.height) return;
   }
 
-  // --- Blit check: skip subtree if bounds unchanged + clean ---
-  if (fn && boundsMatch && !node._dirty && !node._childWasDetached && frontBuffer) {
+  // --- Blit check: skip subtree if clean ---
+  // Pass 1 propagates dirty for movement, so !_dirty implies bounds unchanged
+  // AND no descendant changed AND no descendant moved.
+  if (fn && !node._dirty && !node._childWasDetached && frontBuffer) {
     blitRegion(frontBuffer, buffer, absY, absX, absY, absX, h, w);
     if (perf) {
       perf.count('subtreeBlits');
@@ -228,9 +293,15 @@ function walkNode(
     if (node.type === 'text') {
       const cache = node._wrapCache;
       let textAlign: 'left' | 'center' | 'right' | undefined;
-      const parentAlign = node.parent?.props.alignItems as string | undefined;
-      if (parentAlign === 'center') textAlign = 'center';
-      else if (parentAlign === 'flex-end') textAlign = 'right';
+      // alignItems acts on the cross-axis. Yoga already positions this node
+      // along the cross axis — we only need a per-line text offset when the
+      // cross axis is horizontal, i.e. flexDirection: 'row'.
+      const parentFlexDirection = (node.parent?.props.flexDirection as string | undefined) ?? 'column';
+      if (parentFlexDirection === 'row') {
+        const parentAlign = node.parent?.props.alignItems as string | undefined;
+        if (parentAlign === 'center') textAlign = 'center';
+        else if (parentAlign === 'flex-end') textAlign = 'right';
+      }
       node.layout = {
         x: absX, y: absY, width: w, height: h,
         wrappedLines: cache?.wrappedLines ?? [],
@@ -300,10 +371,15 @@ function walkNode(
     paintBorder(node, style, buffer, charTable, styleTable, effectiveOffset, perf);
   }
 
+  // Pass 1 already processed _pendingClears for this node. If any removal
+  // happened on this parent, poison the front buffer for all children so
+  // their blits don't reintroduce stale content over the cleared region.
+  const childFrontBuffer = node._childWasDetached ? null : frontBuffer;
+
   // --- Recurse children with sibling overflow tracking ---
   let overflowTainted = false;
   for (const child of node.children) {
-    const childFront = overflowTainted ? null : frontBuffer;
+    const childFront = overflowTainted ? null : childFrontBuffer;
 
     walkNode(child, style, buffer, childFront, charTable, styleTable, linkTable, scrollOffset, skipScrollOffset, perf, absX, absY);
 

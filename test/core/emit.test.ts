@@ -12,7 +12,7 @@ import {
   writeCell,
   readCell,
   blitRegion,
-  expandDamageForShrink,
+  clearRegion,
   NORMAL_WIDTH,
   WIDE_WIDTH,
   CONTINUATION_WIDTH,
@@ -111,8 +111,8 @@ describe('diffBuffers', () => {
 
     const back = createCellBuffer(10, 3);
     // Row 1 is blank in back (default), had content in front.
-    // Use expandDamageForShrink to include the erased row in damage bounds.
-    expandDamageForShrink(front, back);
+    // Use clearRegion to mark the erased row as damaged in back.
+    clearRegion(back, 0, 1, 10, 1);
 
     const { output } = runDiff(front, back, st, ct, new LinkTable());
     // Should contain erase-to-end or erase-line

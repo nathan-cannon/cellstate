@@ -25,7 +25,6 @@ import {
   createCellBuffer,
   isDamaged,
   viewportSlice,
-  expandDamageForShrink,
 } from '../../src/core/cell-buffer.js';
 import {
   diffBuffers,
@@ -263,8 +262,6 @@ describe('growth burst — unit tests', () => {
     const lines: string[] = ['Header'];
     for (let i = 1; i <= 79; i++) lines.push(`Line ${i}`);
     const { buf: back } = buildAndPaint(lines, width, null, tables);
-
-    expandDamageForShrink(front, back);
 
     // Diff the viewport slice
     const backStart = Math.max(0, back.height - viewportRows);

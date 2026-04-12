@@ -33,18 +33,3 @@ export function clearAllDirty(root: TNode): void {
   }
 }
 
-// --- Absolute-positioned removal flag ---
-
-let absoluteDetached = false;
-
-/** Signal that an absolute-positioned child was removed this frame. */
-export function setAbsoluteFlag(): void {
-  absoluteDetached = true;
-}
-
-/** Read and reset the absolute-detached flag. */
-export function drainAbsoluteFlag(): boolean {
-  const v = absoluteDetached;
-  absoluteDetached = false;
-  return v;
-}

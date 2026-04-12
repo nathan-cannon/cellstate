@@ -8,7 +8,7 @@ import {
   type LayoutResult,
   type WrappedLine,
 } from '../../src/core/nodes.js';
-import { propagateDirty, clearAllDirty, setAbsoluteFlag, drainAbsoluteFlag } from '../../src/core/dirty.js';
+import { propagateDirty, clearAllDirty } from '../../src/core/dirty.js';
 import { CharTable, SPACE_CHAR } from '../../src/core/char-table.js';
 import { StyleTable, DEFAULT_STYLE } from '../../src/core/style-table.js';
 import { LinkTable, NO_LINK } from '../../src/core/link-table.js';
@@ -329,10 +329,8 @@ describe('incremental paint — sibling overflow', () => {
 // Absolute removal
 // =====================================================================
 
-describe('incremental paint — absolute removal', () => {
-  it('absolute removal disables ALL blitting for the frame', () => {
-    drainAbsoluteFlag();
-
+describe('incremental paint — pending clears', () => {
+  it('pending clears on a node erase the old rect and damage the back buffer', () => {
     const root = createNode('root');
     const box = createNode('box');
     const text = makeText('content');
@@ -348,20 +346,25 @@ describe('incremental paint — absolute removal', () => {
     root.flexNode!.calculateLayout(40);
     populateLayoutResults(root);
 
-    setAbsoluteFlag();
+    // Simulate: a child was removed and its bounds were collected onto root.
+    root._pendingClears = [{ x: 5, y: 2, width: 8, height: 3 }];
+    propagateDirty(root);
 
     const back = createCellBuffer(40, 10);
-    const perf = createPerf(true);
-    paintTree(root, back, front, tables.ct, tables.st, tables.lt, 0, perf);
+    paintTree(root, back, front, tables.ct, tables.st, tables.lt, 0);
 
-    const snap = perf.snapshot()!;
-    expect(snap.counts.subtreeBlits ?? 0).toBe(0);
-    expect(snap.counts.subtreesPainted).toBeGreaterThan(0);
+    // The cleared rect must be inside the back buffer's damage box.
+    expect(back.damageBox).not.toBeNull();
+    const d = back.damageBox!;
+    expect(d.minRow).toBeLessThanOrEqual(2);
+    expect(d.maxRow).toBeGreaterThanOrEqual(4);
+    expect(d.minCol).toBeLessThanOrEqual(5);
+    expect(d.maxCol).toBeGreaterThanOrEqual(12);
+    // Pending clears are consumed
+    expect(root._pendingClears).toBeUndefined();
   });
 
   it('normal-flow child removal only affects parent subtree; siblings elsewhere can blit', () => {
-    drainAbsoluteFlag();
-
     const root = createNode('root');
     const leftBox = createNode('box');
     const leftText = makeText('left');

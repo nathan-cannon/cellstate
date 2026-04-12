@@ -46,6 +46,8 @@ export interface TNode {
   _dirty?: boolean;
   _childWasDetached?: boolean;
   _prevBounds?: { x: number; y: number; width: number; height: number } | null;
+  /** Bounds of nodes removed from this subtree last commit, awaiting clear during paint. */
+  _pendingClears?: Array<{ x: number; y: number; width: number; height: number }>;
   _wrapCache?: {
     width: number;
     wrappedLines: WrappedLine[];

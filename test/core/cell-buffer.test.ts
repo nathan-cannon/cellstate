@@ -200,14 +200,13 @@ describe('CellBuffer', () => {
       expect(readCell(dst, 3, 4)!.charId).toBe(ct.intern('D'));
     });
 
-    test('does NOT expand damage on destination', () => {
+    test('expands damage to cover the blitted region', () => {
       const ct = new CharTable();
       const src = createCellBuffer(10, 5);
       const dst = createCellBuffer(10, 5);
       writeCell(src, 0, 0, ct.intern('X'), DEFAULT_STYLE, NO_LINK, NORMAL_WIDTH);
-      blitRegion(src, dst, 0, 0, 0, 0, 1, 1);
-      // Blitted content is identical — no damage expansion needed
-      expect(dst.damageBox).toBeNull();
+      blitRegion(src, dst, 0, 0, 2, 3, 2, 4);
+      expect(dst.damageBox).toEqual({ minRow: 2, maxRow: 3, minCol: 3, maxCol: 6 });
     });
 
     test('clamps to bounds', () => {

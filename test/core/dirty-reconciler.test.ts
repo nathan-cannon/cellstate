@@ -2,7 +2,7 @@ import { describe, it, expect } from 'bun:test';
 import React from 'react';
 import { mountRoot } from '../../src/core/reconciler.js';
 import type { TNode } from '../../src/core/nodes.js';
-import { clearAllDirty, drainAbsoluteFlag } from '../../src/core/dirty.js';
+import { clearAllDirty } from '../../src/core/dirty.js';
 
 const Box = 'box' as any;
 const Text = 'text' as any;
@@ -98,10 +98,7 @@ describe('dirty propagation in reconciler', () => {
     expect(root!._dirty).toBe(true);
   });
 
-  it('removeChild of absolute-positioned child calls setAbsoluteFlag', async () => {
-    // Drain any prior flag
-    drainAbsoluteFlag();
-
+  it('removeChild of absolute-positioned child queues a pending clear on the parent', async () => {
     let root: TNode | null = null;
     const { update } = mountRoot(
       React.createElement(
@@ -112,14 +109,17 @@ describe('dirty propagation in reconciler', () => {
       (r) => { root = r; },
     );
     await flush();
+    // Seed _prevBounds so that removeChild has something to collect
+    const outerBox = root!.children[0]!;
+    const absChild = outerBox.children[0]!;
+    absChild._prevBounds = { x: 0, y: 0, width: 4, height: 2 };
     clearAllDirty(root!);
 
     update(React.createElement(Box, null));
     await flush();
 
-    expect(drainAbsoluteFlag()).toBe(true);
-    // Second drain should be false
-    expect(drainAbsoluteFlag()).toBe(false);
+    expect(outerBox._pendingClears?.length).toBe(1);
+    expect(outerBox._pendingClears?.[0]).toEqual({ x: 0, y: 0, width: 4, height: 2 });
   });
 
   it('appendChild marks parent dirty', async () => {

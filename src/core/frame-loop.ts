@@ -397,17 +397,36 @@ export function createFrameLoop(
       // scrollback. Any shrink with scrollback needs a full reset.
       const shrinkNeedsReset = contentHeight < lastFrameHeight;
 
-      // For update/growth: check if back buffer damage falls in unreachable rows.
-      // Only check backBuffer damage — frontRef damage is from the previous
-      // frame's rasterization and doesn't reflect current changes.
-      const damageMin = backBuffer.damageBox?.minRow ?? contentHeight;
-      const damageNeedsReset = damageMin < unreachableRows;
+      // For update/growth: walk the unreachable rows cell-by-cell and only
+      // force a reset if front and back actually differ there. Damage bounds
+      // would over-trigger this — blitted regions always expand damage to
+      // catch terminal desync, but their cells are identical to the front
+      // and so don't require a reset. Compare BigInt64 packed cells
+      // directly via cellBulk for a fast, allocation-free scan.
+      const front = frontRef!;
+      const compareRows = Math.min(unreachableRows, front.height, backBuffer.height);
+      const compareWidth = Math.min(front.width, backBuffer.width);
+      let damageNeedsReset = false;
+      for (let r = 0; r < compareRows && !damageNeedsReset; r++) {
+        const fBase = r * front.width;
+        const bBase = r * backBuffer.width;
+        for (let c = 0; c < compareWidth; c++) {
+          if (front.cellBulk[fBase + c] !== backBuffer.cellBulk[bBase + c]) {
+            damageNeedsReset = true;
+            break;
+          }
+        }
+      }
+      // Width mismatch in the unreachable region also forces a reset.
+      if (!damageNeedsReset && front.width !== backBuffer.width && compareRows > 0) {
+        damageNeedsReset = true;
+      }
 
       if (shrinkNeedsReset || damageNeedsReset) {
         if (process.env.DEBUG) {
           process.stderr.write(
             `[FRAME] full reset: unreachable rows=${unreachableRows}` +
-            (shrinkNeedsReset ? ' (shrink)' : ` (damage at row ${damageMin})`) + '\n',
+            (shrinkNeedsReset ? ' (shrink)' : ' (unreachable cell diff)') + '\n',
           );
         }
         perf.count('framesFullRedraw');

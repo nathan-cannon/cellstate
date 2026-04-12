@@ -21,7 +21,18 @@ import {
 import type { FlexNodeFactory } from '../layout/flex-node.js';
 import { applyBoxProps } from '../layout/apply-props.js';
 import { computeTextLayout } from '../layout/text-layout.js';
-import { propagateDirty, setAbsoluteFlag } from './dirty.js';
+import { propagateDirty } from './dirty.js';
+
+function collectBoundsRecursive(
+  node: TNode,
+  out: Array<{ x: number; y: number; width: number; height: number }>,
+): void {
+  if (node._prevBounds) {
+    out.push(node._prevBounds);
+    node._prevBounds = null;
+  }
+  for (const c of node.children) collectBoundsRecursive(c, out);
+}
 
 /** Props that affect rendering output (style, visibility, border, text content). */
 const RENDERING_PROPS: readonly string[] = [
@@ -106,11 +117,12 @@ function appendChild(parent: TNode, child: TNode): void {
 }
 
 function removeChild(parent: TNode, child: TNode): void {
-  const wasAbsolute = child.props.position === 'absolute';
+  const clears = parent._pendingClears ?? [];
+  collectBoundsRecursive(child, clears);
+  if (clears.length > 0) parent._pendingClears = clears;
   rawRemoveChild(parent, child);
   parent._childWasDetached = true;
   propagateDirty(parent);
-  if (wasAbsolute) setAbsoluteFlag();
 }
 
 function insertBefore(parent: TNode, child: TNode, before: TNode): void {
