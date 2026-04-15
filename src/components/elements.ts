@@ -4,7 +4,7 @@
  * actual component functions, similar to how React DOM handles 'div'/'span'.
  */
 import React from 'react';
-import type { BoxProps, TextProps, RawAnsiProps } from './jsx.js';
+import type { BoxProps, TextProps, RawAnsiProps } from './types.js';
 
 export const Box = 'box' as unknown as React.FC<BoxProps>;
 export const Text = 'text' as unknown as React.FC<TextProps>;

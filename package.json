@@ -53,20 +53,33 @@
     "typescript": "^5.8.0"
   },
   "license": "MIT",
+  "author": "Nathan Cannon",
   "repository": {
     "type": "git",
     "url": "https://github.com/nathan-cannon/cellstate"
   },
+  "bugs": {
+  "url": "https://github.com/nathan-cannon/cellstate/issues"
+  },
   "keywords": [
-    "react",
-    "terminal",
-    "tui",
-    "cli",
-    "renderer",
-    "ink",
-    "console",
-    "ansi",
-    "cellstate"
+  "react",
+  "terminal",
+  "tui",
+  "cli",
+  "renderer",
+  "console",
+  "ansi",
+  "typescript",
+  "nodejs",
+  "flexbox",
+  "yoga",
+  "markdown",
+  "streaming",
+  "llm",
+  "unicode",
+  "emoji",
+  "ink-alternative",
+  "cellstate"
   ],
   "engines": {
     "node": ">=18"

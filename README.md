@@ -24,13 +24,45 @@ Unicode handling covers CJK characters, emoji, grapheme clusters, ZWJ sequences,
 
 ---
 
-## Install
-```
-npm install cellstate react
+## Quickstart
+
+CellState is **ESM-only** and requires **React 19+** and **Node 18+**.
+
+**1. Install**
+```bash
+npm install cellstate react@19
+npm install -D typescript @types/react@19 @types/node tsx
 ```
 
+**2. `package.json`**: must include `"type": "module"`
+```json
+{
+  "name": "my-cli",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "tsx src/app.tsx"
+  }
+}
+```
 
-## Usage
+**3. `tsconfig.json`**: minimum working config
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "jsx": "react-jsx",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  },
+  "include": ["src"]
+}
+```
+
+**4. `src/app.tsx`**: hello world
 ```tsx
 import React, { useState } from 'react';
 import { render, Box, Text, useInput, useApp } from 'cellstate';
@@ -56,6 +88,13 @@ function App() {
 const app = render(<App />);
 await app.waitUntilExit();
 ```
+
+**5. Run**
+```bash
+npm run dev
+```
+
+> **Note:** All components are capitalized (`<Box>`, `<Text>`, `<Divider>`). CellState does not expose lowercase JSX intrinsics. Always import components from `'cellstate'`.
 
 
 ## Contents
