@@ -62,7 +62,7 @@ npm install -D typescript @types/react@19 @types/node tsx
 }
 ```
 
-**4. `src/app.tsx`**: hello world
+**4. `src/app.tsx`**: minimal example
 ```tsx
 import React, { useState } from 'react';
 import { render, Box, Text, useInput, useApp } from 'cellstate';
@@ -94,7 +94,7 @@ await app.waitUntilExit();
 npm run dev
 ```
 
-> **Note:** All components are capitalized (`<Box>`, `<Text>`, `<Divider>`). CellState does not expose lowercase JSX intrinsics. Always import components from `'cellstate'`.
+> **Note:** All cellstate components use capitalized names (e.g. `<Box>`, `<Text>`). CellState does not expose lowercase JSX intrinsics. Always import components from `'cellstate'`.
 
 
 ## Contents
@@ -238,7 +238,7 @@ Renders styled text with automatic line wrapping.
 | `color`           | `string`    | Foreground color (`#RRGGBB` hex). Also available as `fg`  |
 | `backgroundColor` | `string`    | Background color (`#RRGGBB` hex)                          |
 | `hangingIndent`   | `number`    | Indent for wrapped continuation lines                     |
-| `wrap`            | `string`    | Text overflow: `'wrap'` (default), `'truncate'`, `'truncate-start'`, `'truncate-middle'` |
+| `wrap`            | `string`    | Text overflow: `'wrap'` (default), `'truncate'`, `'truncate-end'`, `'truncate-start'`, `'truncate-middle'` |
 | `segments`        | `Segment[]` | Multiple styled sections in one text element              |
 
 When text exceeds the available width, `wrap` controls how it's handled:
@@ -564,7 +564,7 @@ function PermissionPrompt({ onResolve }: { onResolve: () => void }) {
 **Coding agent pattern:**
 
 ```tsx
-import { useFocus, useFocusManager, useInput, Box, Text } from 'cellstate';
+import { useFocus, useFocusManager, useInput, Text } from 'cellstate';
 
 function InputField() {
   const { isFocused } = useFocus({ id: 'input', autoFocus: true });
